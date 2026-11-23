@@ -1,7 +1,6 @@
 package com.example.ui.screens
 
 import android.Manifest
-import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -25,16 +24,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.DocumentScanner
-import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.OpenInBrowser
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Storage
-import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
@@ -455,8 +450,6 @@ fun SettingsDiagnosticsScreen(
     onSetLanguage: (String) -> Unit,
     onSetAutoScan: (Boolean, Int) -> Unit,
     onSetNotifications: (Boolean) -> Unit,
-    onInstallOcrModels: (List<Uri>, OcrModelSlot?) -> Unit,
-    onResetOcrModels: () -> Unit,
     onReprocessPendingOcr: () -> Unit,
     onOpenBackupCenter: () -> Unit
 ) {
@@ -465,24 +458,6 @@ fun SettingsDiagnosticsScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         onSetNotifications(granted)
-    }
-
-    var pendingSlot by remember { mutableStateOf<OcrModelSlot?>(null) }
-    val multiModelLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenMultipleDocuments()
-    ) { uris ->
-        if (uris.isNotEmpty()) {
-            onInstallOcrModels(uris, null)
-        }
-    }
-    val singleSlotModelLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        val slot = pendingSlot
-        pendingSlot = null
-        if (uri != null) {
-            onInstallOcrModels(listOf(uri), slot)
-        }
     }
 
     Box(
@@ -510,16 +485,20 @@ fun SettingsDiagnosticsScreen(
                 }
             }
 
-            // Install / Update Offline OCR Model Card
+            // Built-in Pinned Offline OCR Model Card (no downloads needed)
             item {
                 OverseerCard(modifier = Modifier.testTag("ocr_model_settings_card")) {
                     SectionHeaderRow(
-                        title = "ติดตั้ง / อัปเดตโมเดล OCR (PP-OCRv5)",
-                        subtitle = "ประมวลผลออฟไลน์ในเครื่อง 100% ผ่าน ONNX Runtime",
+                        title = "โมเดล OCR ออฟไลน์ในตัวแอป (Pinned)",
+                        subtitle = "รุ่น ${ocrDiagnostics.pinnedVersion} • ไม่ต้องดาวน์โหลดเพิ่ม",
                         trailing = {
                             StatusBadge(
-                                text = if (ocrDiagnostics.status == OcrModelStatus.READY) "พร้อมใช้งาน" else "รอติดตั้งไฟล์",
-                                color = if (ocrDiagnostics.status == OcrModelStatus.READY) IncomeEmerald else WarningAmber
+                                text = when (ocrDiagnostics.status) {
+                                    OcrModelStatus.READY -> if (ocrDiagnostics.allIntegrityVerified) "พร้อมใช้ (SHA-256 ✓)" else "พร้อมใช้งาน"
+                                    OcrModelStatus.MISSING_MODEL_ASSETS -> "ไม่พบไฟล์ในแอป"
+                                    OcrModelStatus.INFERENCE_ERROR -> "Checksum ไม่ตรงรุ่น"
+                                },
+                                color = if (ocrDiagnostics.status == OcrModelStatus.READY) IncomeEmerald else ExpenseCoral
                             )
                         }
                     )
@@ -529,7 +508,7 @@ fun SettingsDiagnosticsScreen(
                         fileName = PaddleOcrEngine.DET_MODEL_FILE,
                         label = OcrModelSlot.DETECTION.labelTh,
                         installed = ocrDiagnostics.hasDetectionModel,
-                        source = ocrDiagnostics.detectionSource,
+                        verified = ocrDiagnostics.detectionSha256Verified,
                         sizeBytes = ocrDiagnostics.detectionSizeBytes
                     )
                     Spacer(Modifier.height(6.dp))
@@ -537,90 +516,20 @@ fun SettingsDiagnosticsScreen(
                         fileName = PaddleOcrEngine.REC_MODEL_FILE,
                         label = OcrModelSlot.RECOGNITION.labelTh,
                         installed = ocrDiagnostics.hasRecognitionModel,
-                        source = ocrDiagnostics.recognitionSource,
+                        verified = ocrDiagnostics.recognitionSha256Verified,
                         sizeBytes = ocrDiagnostics.recognitionSizeBytes
                     )
                     Spacer(Modifier.height(6.dp))
                     OcrSlotStatusRow(
                         fileName = PaddleOcrEngine.DICT_FILE,
-                        label = OcrModelSlot.DICTIONARY.labelTh,
+                        label = "${OcrModelSlot.DICTIONARY.labelTh} (${ocrDiagnostics.dictionaryCharCount} อักขระ)",
                         installed = ocrDiagnostics.hasDictionary,
-                        source = ocrDiagnostics.dictionarySource,
+                        verified = ocrDiagnostics.dictionarySha256Verified,
                         sizeBytes = ocrDiagnostics.dictionarySizeBytes
                     )
 
-                    ocrDiagnostics.lastUpdatedEpochMillis?.let { ts ->
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            "อัปเดตโมเดลล่าสุด: ${ThaiDateFormatter.formatDateTime(ts, prefs.dateFormat)}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    Spacer(Modifier.height(12.dp))
-                    Button(
-                        onClick = { multiModelLauncher.launch(arrayOf("*/*")) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("install_update_ocr_model_button")
-                    ) {
-                        Icon(Icons.Rounded.UploadFile, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            if (ocrDiagnostics.status == OcrModelStatus.READY) {
-                                "อัปเดตโมเดล OCR (.onnx / th_dict.txt)"
-                            } else {
-                                "ติดตั้งโมเดล OCR จากไฟล์ในเครื่อง (.onnx)"
-                            },
-                            maxLines = 1
-                        )
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = {
-                                pendingSlot = OcrModelSlot.DETECTION
-                                singleSlotModelLauncher.launch(arrayOf("*/*"))
-                            }
-                        ) {
-                            Icon(Icons.Rounded.DocumentScanner, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("เลือก Det (.onnx)", maxLines = 1)
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                pendingSlot = OcrModelSlot.RECOGNITION
-                                singleSlotModelLauncher.launch(arrayOf("*/*"))
-                            }
-                        ) {
-                            Icon(Icons.Rounded.DocumentScanner, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("เลือก Rec (.onnx)", maxLines = 1)
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                runCatching {
-                                    context.startActivity(
-                                        Intent(Intent.ACTION_VIEW, Uri.parse(PaddleOcrEngine.OFFICIAL_MODEL_GUIDE_URL))
-                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    )
-                                }
-                            }
-                        ) {
-                            Icon(Icons.Rounded.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("เปิดหน้าดาวน์โหลดโมเดล", maxLines = 1)
-                        }
-                    }
-
                     if (ocrDiagnostics.status == OcrModelStatus.READY && pendingOcrCount > 0) {
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(10.dp))
                         OutlinedButton(
                             onClick = onReprocessPendingOcr,
                             modifier = Modifier.fillMaxWidth()
@@ -628,13 +537,6 @@ fun SettingsDiagnosticsScreen(
                             Icon(Icons.Rounded.Refresh, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
                             Text("สแกน OCR ซ้ำกับสลิปรอตรวจ ($pendingOcrCount รายการ)", maxLines = 1)
-                        }
-                    }
-
-                    if (ocrDiagnostics.hasUserInstalledFiles) {
-                        Spacer(Modifier.height(4.dp))
-                        TextButton(onClick = onResetOcrModels) {
-                            Text("ล้างไฟล์โมเดลที่ติดตั้งเอง", color = ExpenseCoral)
                         }
                     }
                 }
@@ -771,7 +673,7 @@ private fun OcrSlotStatusRow(
     fileName: String,
     label: String,
     installed: Boolean,
-    source: String,
+    verified: Boolean,
     sizeBytes: Long
 ) {
     Row(
@@ -786,14 +688,18 @@ private fun OcrSlotStatusRow(
         ) {
             Text(label, style = MaterialTheme.typography.bodyMedium)
             Text(
-                "$fileName • $source${if (sizeBytes > 0L) " (${sizeBytes / 1024} KB)" else ""}",
+                "$fileName • ฝังในแอป${if (sizeBytes > 0L) " (${sizeBytes / 1024} KB)" else ""}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         StatusBadge(
-            text = if (installed) "ติดตั้งแล้ว" else "ขาดไฟล์",
-            color = if (installed) IncomeEmerald else WarningAmber
+            text = when {
+                installed && verified -> "SHA-256 ✓"
+                installed -> "พร้อมใช้"
+                else -> "ขาดไฟล์"
+            },
+            color = if (installed) IncomeEmerald else ExpenseCoral
         )
     }
 }

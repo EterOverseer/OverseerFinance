@@ -60,6 +60,9 @@ android {
     compose = true
     buildConfig = true
   }
+  androidResources {
+    noCompress += "onnx"
+  }
   testOptions { unitTests { isIncludeAndroidResources = true } }
   dependenciesInfo {
     includeInApk = false

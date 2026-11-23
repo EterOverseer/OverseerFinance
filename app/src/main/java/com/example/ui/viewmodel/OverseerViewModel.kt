@@ -2,7 +2,6 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import android.net.Uri
-import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.OverseerApplication
@@ -51,7 +50,6 @@ import com.example.domain.BackupPreviewResult
 import com.example.domain.FinancialInsight
 import com.example.domain.FinancialIntelligenceEngine
 import com.example.domain.OcrModelDiagnostics
-import com.example.domain.OcrModelSlot
 import com.example.domain.PaddleOcrEngine
 import com.example.domain.ReportExporter
 import com.example.domain.ReportType
@@ -189,10 +187,31 @@ class OverseerViewModel(application: Application) : AndroidViewModel(application
     val backupHistory: StateFlow<List<BackupHistoryEntity>> = repo.backupHistory
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    private val _ocrDiagnostics = MutableStateFlow(ocrEngine.inspectDiagnostics())
+    private val _ocrDiagnostics = MutableStateFlow(
+        OcrModelDiagnostics(
+            status = OcrModelStatus.READY,
+            pinnedVersion = PaddleOcrEngine.PINNED_MODEL_VERSION,
+            hasDetectionModel = true,
+            detectionSizeBytes = PaddleOcrEngine.DET_MODEL_BYTES,
+            detectionSha256Verified = false,
+            hasRecognitionModel = true,
+            recognitionSizeBytes = PaddleOcrEngine.REC_MODEL_BYTES,
+            recognitionSha256Verified = false,
+            hasDictionary = true,
+            dictionarySizeBytes = 0L,
+            dictionaryCharCount = PaddleOcrEngine.DICT_CHAR_COUNT,
+            dictionarySha256Verified = false
+        )
+    )
     val ocrDiagnostics: StateFlow<OcrModelDiagnostics> = _ocrDiagnostics.asStateFlow()
 
     val ocrModelStatus: OcrModelStatus get() = _ocrDiagnostics.value.status
+
+    init {
+        viewModelScope.launch(Dispatchers.IO) {
+            _ocrDiagnostics.value = ocrEngine.inspectDiagnostics()
+        }
+    }
 
     val taxProfile: StateFlow<TaxProfileEntity?> = preferences
         .flatMapLatest { repo.observeTaxProfile(it.selectedTaxYearBe) }
@@ -523,35 +542,6 @@ class OverseerViewModel(application: Application) : AndroidViewModel(application
         _scanFeedback.value = null
     }
 
-    fun installOcrModelUris(uris: List<Uri>, explicitSlot: OcrModelSlot? = null) = viewModelScope.launch(Dispatchers.IO) {
-        if (uris.isEmpty()) return@launch
-        val resolver = getApplication<Application>().contentResolver
-        val openedStreams = mutableListOf<java.io.InputStream>()
-        val entries = mutableListOf<Pair<String, java.io.InputStream>>()
-        try {
-            for (uri in uris) {
-                val displayName = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-                    if (c.moveToFirst()) c.getString(0) else null
-                } ?: uri.lastPathSegment ?: "model.onnx"
-                val stream = resolver.openInputStream(uri)
-                if (stream != null) {
-                    openedStreams += stream
-                    entries += displayName to stream
-                }
-            }
-            val res = ocrEngine.installOrUpdateModelFiles(entries, explicitSlot)
-            _ocrDiagnostics.value = res.diagnostics
-            _scanFeedback.value = res.messageTh.ifBlank { "ไม่พบไฟล์โมเดลที่รองรับ" }
-        } finally {
-            openedStreams.forEach { runCatching { it.close() } }
-        }
-    }
-
-    fun resetInstalledOcrModels() = viewModelScope.launch(Dispatchers.IO) {
-        _ocrDiagnostics.value = ocrEngine.resetInstalledModels()
-        _scanFeedback.value = "ล้างไฟล์โมเดล OCR ที่ติดตั้งในเครื่องแล้ว"
-    }
-
     fun reprocessPendingOcrSlips() = viewModelScope.launch {
         _isScanning.value = true
         val count = scannerPipeline.reprocessPendingOcrSlips()
@@ -559,7 +549,7 @@ class OverseerViewModel(application: Application) : AndroidViewModel(application
         _scanFeedback.value = if (count > 0) {
             "อ่าน OCR สลิปที่รอตรวจซ้ำสำเร็จ $count รายการ"
         } else {
-            "ไม่มีสลิปรอตรวจที่เข้าเงื่อนไข หรือยังไม่ได้ติดตั้งโมเดล OCR"
+            "ไม่มีสลิปรอตรวจที่ต้องสแกนซ้ำ"
         }
     }
 
@@ -1061,9 +1051,7 @@ class OverseerViewModel(application: Application) : AndroidViewModel(application
             ?.walkTopDown()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
         val taxDocBytes = taxDocVaultManager.vaultDocsDir().takeIf { it.exists() }
             ?.walkTopDown()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
-        val ocrModelBytes = ocrEngine.ocrModelsDir().takeIf { it.exists() }
-            ?.walkTopDown()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
-        return imgBytes + taxDocBytes + ocrModelBytes
+        return imgBytes + taxDocBytes
     }
 
     fun databaseSizeBytes(): Long {

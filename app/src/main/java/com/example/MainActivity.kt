@@ -12,11 +12,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.Calculate
 import androidx.compose.material.icons.rounded.DocumentScanner
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.ReceiptLong
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -163,7 +163,7 @@ fun OverseerAppRoot(viewModel: OverseerViewModel = viewModel()) {
         val tabs = remember {
             listOf(
                 BottomTabItem(HomeRoute, "หน้าหลัก", Icons.Rounded.Home, "nav_home"),
-                BottomTabItem(TransactionsRoute, "รายการ", Icons.Rounded.ReceiptLong, "nav_transactions"),
+                BottomTabItem(TransactionsRoute, "รายการ", Icons.AutoMirrored.Rounded.ReceiptLong, "nav_transactions"),
                 BottomTabItem(ScanRoute, "สแกน", Icons.Rounded.DocumentScanner, "nav_scan"),
                 BottomTabItem(TaxRoute, "ภาษี", Icons.Rounded.Calculate, "nav_tax"),
                 BottomTabItem(MoreRoute, "เพิ่มเติม", Icons.Rounded.GridView, "nav_more")
@@ -309,10 +309,6 @@ fun OverseerAppRoot(viewModel: OverseerViewModel = viewModel()) {
                                     onConfirmReviewTx = { tx -> viewModel.saveTransaction(tx, null) },
                                     onDeleteReviewTx = viewModel::deleteTransaction,
                                     onOpenStorageCleaner = { showStorageCleaner = true },
-                                    onOpenOcrSettings = {
-                                        moreSubScreen = MoreSubScreen.SETTINGS_DIAGNOSTICS
-                                        navigateToTab(MoreRoute)
-                                    },
                                     onReprocessPendingOcr = viewModel::reprocessPendingOcrSlips
                                 )
                             }
@@ -476,8 +472,6 @@ fun OverseerAppRoot(viewModel: OverseerViewModel = viewModel()) {
                                         onSetLanguage = viewModel::setLanguage,
                                         onSetAutoScan = viewModel::setAutoScanConfig,
                                         onSetNotifications = viewModel::setNotificationsEnabled,
-                                        onInstallOcrModels = viewModel::installOcrModelUris,
-                                        onResetOcrModels = viewModel::resetInstalledOcrModels,
                                         onReprocessPendingOcr = viewModel::reprocessPendingOcrSlips,
                                         onOpenBackupCenter = { moreSubScreen = MoreSubScreen.BACKUP_CENTER }
                                     )

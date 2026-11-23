@@ -31,59 +31,29 @@ import java.time.LocalDate
 class DatabaseMigrationAndOcrTest {
 
     @Test
-    fun `paddle ocr engine honestly reports missing onnx model assets without fake output`() {
+    fun `paddle ocr engine bundles pinned pp-ocrv5 onnx models with verified sha256 and thai ctc dict`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val engine = PaddleOcrEngine(context)
-        assertEquals(OcrModelStatus.MISSING_MODEL_ASSETS, engine.inspectModelAvailability())
+        val diag = engine.inspectDiagnostics()
 
-        val dummyFile = File(context.cacheDir, "dummy_slip.jpg").apply { writeBytes(byteArrayOf(1, 2, 3)) }
-        val outcome = engine.recognizeSlip(dummyFile)
-        assertEquals(OcrModelStatus.MISSING_MODEL_ASSETS, outcome.modelStatus)
-        assertTrue(outcome.lines.isEmpty())
-        assertTrue(outcome.parsedSlip.needsReview)
-        assertEquals(null, outcome.parsedSlip.amountSatang)
-        dummyFile.delete()
-    }
+        assertEquals(OcrModelStatus.READY, diag.status)
+        assertEquals(PaddleOcrEngine.PINNED_MODEL_VERSION, diag.pinnedVersion)
+        assertTrue(diag.hasDetectionModel)
+        assertTrue(diag.detectionSha256Verified)
+        assertEquals(PaddleOcrEngine.DET_MODEL_BYTES, diag.detectionSizeBytes)
+        assertTrue(diag.hasRecognitionModel)
+        assertTrue(diag.recognitionSha256Verified)
+        assertEquals(PaddleOcrEngine.REC_MODEL_BYTES, diag.recognitionSizeBytes)
+        assertTrue(diag.hasDictionary)
+        assertTrue(diag.dictionarySha256Verified)
+        assertTrue(diag.allIntegrityVerified)
 
-    @Test
-    fun `paddle ocr engine installs updates and resets local onnx models with diagnostics`() {
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        val engine = PaddleOcrEngine(context)
-        engine.resetInstalledModels()
-        assertEquals(OcrModelStatus.MISSING_MODEL_ASSETS, engine.inspectModelAvailability())
-
-        // 1) Undersized or explicitly invalid ONNX files must be rejected cleanly
-        val smallBytes = ByteArray(128) { 1 }
-        val rejectedSmall = engine.installOrUpdateModelFiles(
-            listOf("PP-OCRv5_mobile_det.onnx" to smallBytes.inputStream())
-        )
-        assertEquals(0, rejectedSmall.installedCount)
-        assertEquals(OcrModelStatus.MISSING_MODEL_ASSETS, rejectedSmall.diagnostics.status)
-
-        val validSizeBytes = ByteArray(2048) { (it % 127).toByte() }
-        val rejectedInvalidOnnx = engine.installOrUpdateModelFiles(
-            entries = listOf("PP-OCRv5_mobile_det.onnx" to validSizeBytes.inputStream()),
-            validateOnnx = { throw IllegalArgumentException("Invalid ONNX protobuf") }
-        )
-        assertEquals(0, rejectedInvalidOnnx.installedCount)
-        assertEquals(OcrModelStatus.MISSING_MODEL_ASSETS, rejectedInvalidOnnx.diagnostics.status)
-
-        // 2) Installing Det + Rec model files transitions status to READY and reset cleans them
-        val res = engine.installOrUpdateModelFiles(
-            entries = listOf(
-                "PP-OCRv5_mobile_det.onnx" to validSizeBytes.inputStream(),
-                "th_PP-OCRv5_mobile_rec.onnx" to validSizeBytes.inputStream()
-            )
-        )
-        assertEquals(2, res.installedCount)
-        assertEquals(OcrModelStatus.READY, res.diagnostics.status)
-        assertTrue(res.diagnostics.hasUserInstalledFiles)
-        assertTrue(res.diagnostics.hasDetectionModel)
-        assertTrue(res.diagnostics.hasRecognitionModel)
-        assertTrue(res.diagnostics.hasDictionary)
-
-        val resetDiag = engine.resetInstalledModels()
-        assertEquals(OcrModelStatus.MISSING_MODEL_ASSETS, resetDiag.status)
+        val dict = engine.loadDictionary()
+        // 524 official characters + 1 appended space character (' ') = 525 non-blank CTC symbols (+ blank index 0 = 526 classes)
+        assertEquals(PaddleOcrEngine.DICT_CHAR_COUNT + 1, dict.size)
+        assertEquals(" ", dict.last())
+        assertTrue(dict.contains("ก"))
+        assertTrue(dict.contains("฿"))
     }
 
     @Test

@@ -111,7 +111,6 @@ fun ScanCenterScreen(
     onConfirmReviewTx: (TransactionEntity) -> Unit,
     onDeleteReviewTx: (TransactionEntity) -> Unit,
     onOpenStorageCleaner: () -> Unit,
-    onOpenOcrSettings: () -> Unit = {},
     onReprocessPendingOcr: () -> Unit = {}
 ) {
     val folderLauncher = rememberLauncherForActivityResult(
@@ -271,50 +270,39 @@ fun ScanCenterScreen(
             }
         }
 
-        // Offline OCR Engine Status Card (honest reporting + direct settings link)
+        // Offline OCR Engine Status Card (Built-in Pinned PP-OCRv5)
         item {
             OverseerCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         Icons.Rounded.DocumentScanner,
                         contentDescription = null,
-                        tint = if (ocrModelStatus == OcrModelStatus.READY) IncomeEmerald else WarningAmber
+                        tint = if (ocrModelStatus == OcrModelStatus.READY) IncomeEmerald else ExpenseCoral
                     )
                     Spacer(Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("เอนจิน OCR ออฟไลน์ (PaddleOCR PP-OCRv5)", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            text = ocrModelStatus.labelTh,
+                            "เอนจิน OCR ออฟไลน์ (${com.example.domain.PaddleOcrEngine.PINNED_MODEL_VERSION})",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = if (ocrModelStatus == OcrModelStatus.READY) {
+                                "ติดตั้งในแอปเรียบร้อย • พร้อมอ่านสลิปไทย-อังกฤษโดยไม่ต้องต่อเน็ต"
+                            } else {
+                                ocrModelStatus.labelTh
+                            },
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (ocrModelStatus == OcrModelStatus.READY) IncomeEmerald else WarningAmber
+                            color = if (ocrModelStatus == OcrModelStatus.READY) IncomeEmerald else ExpenseCoral
                         )
                     }
                 }
-                if (ocrModelStatus == OcrModelStatus.MISSING_MODEL_ASSETS) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "หมายเหตุ: พบคลังคำศัพท์ th_dict.txt แล้ว แต่ยังไม่ได้ติดตั้งไฟล์โมเดล .onnx คุณสามารถติดตั้ง/อัปเดตไฟล์โมเดลได้ในหน้าตั้งค่า หรือตรวจสอบสลิปเทียบภาพจริงได้ทันที",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = onOpenOcrSettings,
-                        modifier = Modifier.testTag("scan_open_ocr_settings_button")
+                if (ocrModelStatus == OcrModelStatus.READY && pendingTransactions.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(
-                            if (ocrModelStatus == OcrModelStatus.READY) "จัดการ / อัปเดตโมเดล OCR" else "ติดตั้งโมเดล OCR (ตั้งค่า)",
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    }
-                    if (ocrModelStatus == OcrModelStatus.READY && pendingTransactions.isNotEmpty()) {
                         OutlinedButton(
                             onClick = onReprocessPendingOcr,
                             enabled = !isScanning
