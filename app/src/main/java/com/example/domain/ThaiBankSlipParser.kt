@@ -100,13 +100,32 @@ object ThaiBankSlipParser {
         for ((index, line) in lines.withIndex()) {
             val txt = line.text.trim()
             if (txt.isEmpty()) continue
+            val prevTxt = lines.getOrNull(index - 1)?.text?.trim().orEmpty()
 
-            // Amount (prioritize lines with บาท / จำนวน / ยอด)
+            // Amount (skip fee lines including when "ค่าธรรมเนียม" sits in the preceding column box)
+            val isFeeLine = txt.contains("ค่าธรรมเนียม") ||
+                txt.contains("Fee", ignoreCase = true) ||
+                prevTxt.equals("ค่าธรรมเนียม", ignoreCase = true) ||
+                prevTxt.equals("ค่าธรรมเนียม:", ignoreCase = true) ||
+                prevTxt.equals("Fee", ignoreCase = true)
             val amtMatch = amountRegex.find(txt)
-            if (amtMatch != null && !txt.contains("ค่าธรรมเนียม") && !txt.contains("Fee", ignoreCase = true)) {
+            if (amtMatch != null && !isFeeLine) {
                 val parsed = MoneyFormatter.parseThbToSatang(amtMatch.groupValues[1])
-                val hasCurrencyWord = txt.contains("บาท") || txt.contains("THB", true) || txt.contains("จำนวน")
-                if (parsed != null && (amountSatang == null || (hasCurrencyWord && line.confidence >= amountConf))) {
+                val hasAmountHint = txt.contains("บาท") ||
+                    txt.contains("THB", true) ||
+                    txt.contains("จำนวน") ||
+                    txt.contains("ยอดเงิน") ||
+                    txt.contains("ยอดโอน") ||
+                    prevTxt.contains("จำนวน") ||
+                    prevTxt.contains("ยอด")
+                if (parsed != null && parsed > 0L) {
+                    val shouldReplace = amountSatang == null ||
+                        (hasAmountHint && line.confidence >= amountConf)
+                    if (shouldReplace) {
+                        amountSatang = parsed
+                        amountConf = line.confidence
+                    }
+                } else if (parsed != null && amountSatang == null) {
                     amountSatang = parsed
                     amountConf = line.confidence
                 }
@@ -175,7 +194,7 @@ object ThaiBankSlipParser {
 
             // Sender / Recipient heuristic on Thai slip layout ("จาก / From" -> "ไปยัง / To")
             if (sender.isEmpty() && (txt.startsWith("จาก") || txt.equals("From", ignoreCase = true))) {
-                val inline = txt.removePrefix("จาก").removePrefix("From").trim(':', ' ')
+                val inline = txt.removePrefix("จาก").removePrefix("From").trim(':', '：', ' ', '-')
                 if (inline.length >= 2) {
                     sender = inline
                     senderConf = line.confidence
@@ -188,7 +207,7 @@ object ThaiBankSlipParser {
                 }
             }
             if (recipient.isEmpty() && (txt.startsWith("ไปยัง") || txt.startsWith("ถึง") || txt.equals("To", ignoreCase = true))) {
-                val inline = txt.removePrefix("ไปยัง").removePrefix("ถึง").removePrefix("To").trim(':', ' ')
+                val inline = txt.removePrefix("ไปยัง").removePrefix("ถึง").removePrefix("To").trim(':', '：', ' ', '-')
                 if (inline.length >= 2) {
                     recipient = inline
                     recipientConf = line.confidence
@@ -239,11 +258,13 @@ object ThaiBankSlipParser {
     private fun detectBank(fullText: String): String {
         val lower = fullText.lowercase(Locale.US)
         return when {
-            lower.contains("k plus") || lower.contains("kplus") || fullText.contains("กสิกร") -> "KBank (K PLUS)"
+            lower.contains("k plus") || lower.contains("kplus") || lower.contains("k+") || fullText.contains("กสิกร") -> "KBank (K PLUS)"
             lower.contains("scb") || fullText.contains("ไทยพาณิชย์") -> "SCB"
             lower.contains("krungthai") || lower.contains("ktb") || fullText.contains("กรุงไทย") -> "Krungthai"
             lower.contains("bualuang") || lower.contains("bbl") || fullText.contains("กรุงเทพ") -> "Bangkok Bank"
-            lower.contains("krungsri") || fullText.contains("bay") || fullText.contains("กรุงศรี") -> "Krungsri"
+            lower.contains("krungsri") || lower.contains("bay") || fullText.contains("กรุงศรี") -> "Krungsri"
+            lower.contains("ttb") || fullText.contains("ทีทีบี") || fullText.contains("ทหารไทยธนชาต") -> "ttb"
+            lower.contains("gsb") || lower.contains("mymo") || fullText.contains("ออมสิน") -> "GSB"
             lower.contains("promptpay") || fullText.contains("พร้อมเพย์") -> "PromptPay"
             else -> ""
         }

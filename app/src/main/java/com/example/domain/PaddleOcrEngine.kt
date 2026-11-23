@@ -7,14 +7,18 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.Matrix
+import android.media.ExifInterface
 import com.example.data.local.OcrModelStatus
 import java.io.File
 import java.nio.FloatBuffer
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.ceil
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 enum class OcrModelSlot(val fileName: String, val labelTh: String) {
     DETECTION("PP-OCRv5_mobile_det.onnx", "โมเดลตรวจจับข้อความ (Det)"),
@@ -55,11 +59,30 @@ data class OcrExecutionOutcome(
 /**
  * Built-in, version-pinned Offline PaddleOCR PP-OCRv5 ONNX Runtime Engine.
  *
- * All required models and the matching Thai CTC dictionary are bundled inside `assets/ocr/`
- * with pinned upstream revisions and SHA-256 verification so no runtime downloads are needed
- * and future builds cannot suffer from model/dictionary version drift.
+ * Uses 1536px detection scaling, 8-connected-component DBNet post-processing with Thai-safe
+ * vertical unclipping (preserving upper tone marks and lower vowels), horizontal word-only
+ * merging (never merging across column gaps or side icons), and dynamic-width BGR recognition.
  */
 class PaddleOcrEngine(private val context: Context) {
+
+    data class BoxRect(val left: Int, val top: Int, val width: Int, val height: Int) {
+        val right: Int get() = left + width
+        val bottom: Int get() = top + height
+        val centerY: Float get() = top + height / 2f
+    }
+
+    private data class RawComponent(
+        val minX: Int,
+        val minY: Int,
+        val maxX: Int,
+        val maxY: Int,
+        val area: Int,
+        val meanScore: Float
+    ) {
+        val width: Int get() = maxX - minX + 1
+        val height: Int get() = maxY - minY + 1
+        val centerY: Float get() = (minY + maxY) / 2f
+    }
 
     private data class BundledAssetVerification(
         val exists: Boolean,
@@ -90,6 +113,13 @@ class PaddleOcrEngine(private val context: Context) {
         const val DET_MODEL_ASSET = "$ASSET_DIR/$DET_MODEL_FILE"
         const val REC_MODEL_ASSET = "$ASSET_DIR/$REC_MODEL_FILE"
         const val DICT_ASSET = "$ASSET_DIR/$DICT_FILE"
+
+        // High-detail detection & DBPostProcess tuning for Thai slips (small fonts + tone marks)
+        private const val DET_LIMIT_SIDE_LEN = 1536f
+        private const val DET_PIXEL_THRESH = 0.22f
+        private const val DET_BOX_SCORE_THRESH = 0.38f
+        private const val DB_UNCLIP_RATIO = 1.6f
+        private const val REC_MIN_CONFIDENCE = 0.35f
 
         private val verificationCache = ConcurrentHashMap<String, BundledAssetVerification>()
     }
@@ -177,7 +207,7 @@ class PaddleOcrEngine(private val context: Context) {
             )
         }
 
-        val bitmap = BitmapFactory.decodeFile(imageFile.absolutePath)
+        val bitmap = decodeUprightBitmap(imageFile)
             ?: return OcrExecutionOutcome(
                 engineName = ENGINE_NAME,
                 modelVersion = MODEL_VERSION,
@@ -217,6 +247,27 @@ class PaddleOcrEngine(private val context: Context) {
         }
     }
 
+    private fun decodeUprightBitmap(imageFile: File): Bitmap? {
+        val raw = BitmapFactory.decodeFile(imageFile.absolutePath) ?: return null
+        val rotationDegrees = runCatching {
+            when (ExifInterface(imageFile.absolutePath).getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL
+            )) {
+                ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                else -> 0f
+            }
+        }.getOrDefault(0f)
+
+        if (rotationDegrees == 0f) return raw
+        val matrix = Matrix().apply { postRotate(rotationDegrees) }
+        val rotated = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
+        if (rotated !== raw) raw.recycle()
+        return rotated
+    }
+
     private fun readBundledAssetBytes(assetPath: String): ByteArray =
         context.assets.open(assetPath).use { it.readBytes() }
 
@@ -239,7 +290,7 @@ class PaddleOcrEngine(private val context: Context) {
                     )
                     val line = recognizeCroppedLine(env, recSession, crop, dictChars)
                     crop.recycle()
-                    if (line.text.isNotBlank()) {
+                    if (line.text.isNotBlank() && line.confidence >= REC_MIN_CONFIDENCE) {
                         recognized.add(line)
                     }
                 }
@@ -248,15 +299,14 @@ class PaddleOcrEngine(private val context: Context) {
         }
     }
 
-    private data class BoxRect(val left: Int, val top: Int, val width: Int, val height: Int)
-
     private fun detectTextRegions(
         env: OrtEnvironment,
         detSession: OrtSession,
         bitmap: Bitmap
     ): List<BoxRect> {
-        // PP-OCRv5_mobile_det inference.yml: resize_long = 960, img_mode = BGR, mean/std ImageNet
-        val scale = min(960f / max(bitmap.width, bitmap.height), 1f)
+        // PP-OCRv5_mobile_det: keep high resolution up to 1536px so Thai tone marks & small refs stay sharp
+        val maxSide = max(bitmap.width, bitmap.height).coerceAtLeast(1)
+        val scale = min(DET_LIMIT_SIDE_LEN / maxSide, 1f)
         val targetW = (((bitmap.width * scale).toInt() + 31) / 32 * 32).coerceAtLeast(32)
         val targetH = (((bitmap.height * scale).toInt() + 31) / 32 * 32).coerceAtLeast(32)
         val resized = Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
@@ -292,62 +342,186 @@ class PaddleOcrEngine(private val context: Context) {
                 val rawOut = result[0].value as Array<*>
                 @Suppress("UNCHECKED_CAST")
                 val probMap = (rawOut[0] as Array<Array<FloatArray>>)[0]
-                return extractHorizontalLineBoxes(probMap, targetW, targetH, bitmap.width, bitmap.height)
+                return extractTextBoxesFromProbMap(probMap, targetW, targetH, bitmap.width, bitmap.height)
             }
         }
     }
 
-    private fun extractHorizontalLineBoxes(
+    /**
+     * Extracts individual text boxes from DBNet probability map using 8-connected components,
+     * horizontal same-line word merging (without merging across column gaps or left-side icons),
+     * DBNet unclip expansion with Thai upper/lower vowel headroom, and reading-order sorting.
+     */
+    fun extractTextBoxesFromProbMap(
         probMap: Array<FloatArray>,
         mapW: Int,
         mapH: Int,
         origW: Int,
         origH: Int
     ): List<BoxRect> {
-        val activeRows = BooleanArray(mapH)
-        val rowMinX = IntArray(mapH) { mapW }
-        val rowMaxX = IntArray(mapH) { 0 }
+        if (mapW <= 0 || mapH <= 0 || origW <= 0 || origH <= 0) return emptyList()
 
-        for (y in 0 until mapH) {
-            var count = 0
-            for (x in 0 until mapW) {
-                if (probMap[y][x] > 0.3f) {
-                    count++
-                    if (x < rowMinX[y]) rowMinX[y] = x
-                    if (x > rowMaxX[y]) rowMaxX[y] = x
+        val visited = BooleanArray(mapW * mapH)
+        val queue = IntArray(mapW * mapH)
+        val components = mutableListOf<RawComponent>()
+
+        for (sy in 0 until mapH) {
+            val row = probMap[sy]
+            for (sx in 0 until mapW) {
+                val startIdx = sy * mapW + sx
+                if (visited[startIdx] || row[sx] <= DET_PIXEL_THRESH) continue
+
+                visited[startIdx] = true
+                var head = 0
+                var tail = 0
+                queue[tail++] = startIdx
+
+                var minX = sx
+                var maxX = sx
+                var minY = sy
+                var maxY = sy
+                var area = 0
+                var scoreSum = 0f
+
+                while (head < tail) {
+                    val curr = queue[head++]
+                    val cy = curr / mapW
+                    val cx = curr % mapW
+                    area++
+                    scoreSum += probMap[cy][cx]
+                    if (cx < minX) minX = cx
+                    if (cx > maxX) maxX = cx
+                    if (cy < minY) minY = cy
+                    if (cy > maxY) maxY = cy
+
+                    for (dy in -1..1) {
+                        val ny = cy + dy
+                        if (ny !in 0 until mapH) continue
+                        val nRow = probMap[ny]
+                        for (dx in -1..1) {
+                            if (dx == 0 && dy == 0) continue
+                            val nx = cx + dx
+                            if (nx !in 0 until mapW) continue
+                            val nIdx = ny * mapW + nx
+                            if (!visited[nIdx] && nRow[nx] > DET_PIXEL_THRESH) {
+                                visited[nIdx] = true
+                                queue[tail++] = nIdx
+                            }
+                        }
+                    }
+                }
+
+                val compW = maxX - minX + 1
+                val compH = maxY - minY + 1
+                val meanScore = scoreSum / area.coerceAtLeast(1)
+                if (area >= 4 && compW >= 3 && compH >= 2 && meanScore >= DET_BOX_SCORE_THRESH) {
+                    components.add(RawComponent(minX, minY, maxX, maxY, area, meanScore))
                 }
             }
-            if (count >= 4) activeRows[y] = true
         }
 
+        if (components.isEmpty()) return emptyList()
+
+        // Group words on the same text line cleanly (do not bridge wide column gaps or side icons)
+        val sortedForMerge = components.sortedWith(compareBy<RawComponent> { it.minY }.thenBy { it.minX })
+        val merged = mutableListOf<RawComponent>()
+        val used = BooleanArray(sortedForMerge.size)
+
+        for (i in sortedForMerge.indices) {
+            if (used[i]) continue
+            used[i] = true
+            var cur = sortedForMerge[i]
+
+            var changed: Boolean
+            do {
+                changed = false
+                for (j in sortedForMerge.indices) {
+                    if (used[j]) continue
+                    val cand = sortedForMerge[j]
+                    if (shouldMergeSameLineWords(cur, cand)) {
+                        cur = RawComponent(
+                            minX = min(cur.minX, cand.minX),
+                            minY = min(cur.minY, cand.minY),
+                            maxX = max(cur.maxX, cand.maxX),
+                            maxY = max(cur.maxY, cand.maxY),
+                            area = cur.area + cand.area,
+                            meanScore = (cur.meanScore + cand.meanScore) / 2f
+                        )
+                        used[j] = true
+                        changed = true
+                    }
+                }
+            } while (changed)
+
+            merged.add(cur)
+        }
+
+        // Apply DBNet unclip expansion mapped to original image coordinates
         val scaleX = origW.toFloat() / mapW.toFloat()
         val scaleY = origH.toFloat() / mapH.toFloat()
-        val boxes = mutableListOf<BoxRect>()
-        var y = 0
-        while (y < mapH) {
-            if (!activeRows[y]) {
-                y++
-                continue
-            }
-            val startY = y
-            var minX = rowMinX[y]
-            var maxX = rowMaxX[y]
-            while (y < mapH && activeRows[y]) {
-                minX = min(minX, rowMinX[y])
-                maxX = max(maxX, rowMaxX[y])
-                y++
-            }
-            val endY = y
-            if (endY - startY >= 3 && maxX - minX >= 6) {
-                val pad = 4
-                val left = ((minX * scaleX).toInt() - pad).coerceAtLeast(0)
-                val top = ((startY * scaleY).toInt() - pad).coerceAtLeast(0)
-                val right = ((maxX * scaleX).toInt() + pad).coerceAtMost(origW)
-                val bottom = ((endY * scaleY).toInt() + pad).coerceAtMost(origH)
-                boxes.add(BoxRect(left, top, (right - left).coerceAtLeast(1), (bottom - top).coerceAtLeast(1)))
+
+        val unclipped = merged.map { comp ->
+            val rawLeft = comp.minX * scaleX
+            val rawTop = comp.minY * scaleY
+            val rawRight = (comp.maxX + 1) * scaleX
+            val rawBottom = (comp.maxY + 1) * scaleY
+            val boxW = (rawRight - rawLeft).coerceAtLeast(1f)
+            val boxH = (rawBottom - rawTop).coerceAtLeast(1f)
+
+            // DBNet Vatti distance = (area * unclip_ratio) / perimeter
+            val unclipDist = ((boxW * boxH * DB_UNCLIP_RATIO) / (2f * (boxW + boxH))).coerceAtLeast(3f)
+            val expandTop = max(6, (unclipDist * 1.15f).roundToInt()) // Extra margin for Thai upper tone marks
+            val expandBottom = max(5, (unclipDist * 0.95f).roundToInt()) // Margin for lower vowels (ุ / ู)
+            val expandSide = max(6, (unclipDist * 0.85f).roundToInt())
+
+            val left = (rawLeft.roundToInt() - expandSide).coerceAtLeast(0)
+            val top = (rawTop.roundToInt() - expandTop).coerceAtLeast(0)
+            val right = (rawRight.roundToInt() + expandSide).coerceAtMost(origW)
+            val bottom = (rawBottom.roundToInt() + expandBottom).coerceAtMost(origH)
+
+            BoxRect(
+                left = left,
+                top = top,
+                width = (right - left).coerceAtLeast(1),
+                height = (bottom - top).coerceAtLeast(1)
+            )
+        }
+
+        return sortBoxesInReadingOrder(unclipped)
+    }
+
+    private fun shouldMergeSameLineWords(a: RawComponent, b: RawComponent): Boolean {
+        val overlapY = min(a.maxY, b.maxY) - max(a.minY, b.minY) + 1
+        val minH = min(a.height, b.height).coerceAtLeast(1)
+        val maxH = max(a.height, b.height).coerceAtLeast(1)
+        if (overlapY < (minH * 0.50f)) return false
+        if (maxH > minH * 2.2f) return false
+        if (kotlin.math.abs(a.centerY - b.centerY) > maxH * 0.45f) return false
+
+        val horizontalGap = max(a.minX, b.minX) - min(a.maxX, b.maxX) - 1
+        val maxWordGap = max(minH * 1.6f, 8f)
+        return horizontalGap <= maxWordGap
+    }
+
+    private fun sortBoxesInReadingOrder(boxes: List<BoxRect>): List<BoxRect> {
+        if (boxes.size <= 1) return boxes
+        val sortedByY = boxes.sortedBy { it.centerY }
+        val lines = mutableListOf<MutableList<BoxRect>>()
+        for (box in sortedByY) {
+            val existingLine = lines.lastOrNull()
+            if (existingLine == null) {
+                lines.add(mutableListOf(box))
+            } else {
+                val lineAvgY = existingLine.map { it.centerY }.average().toFloat()
+                val lineAvgH = existingLine.map { it.height }.average().toFloat()
+                if (kotlin.math.abs(box.centerY - lineAvgY) <= max(lineAvgH, box.height.toFloat()) * 0.55f) {
+                    existingLine.add(box)
+                } else {
+                    lines.add(mutableListOf(box))
+                }
             }
         }
-        return boxes
+        return lines.flatMap { row -> row.sortedBy { it.left } }
     }
 
     private fun recognizeCroppedLine(
@@ -356,10 +530,10 @@ class PaddleOcrEngine(private val context: Context) {
         crop: Bitmap,
         dictChars: List<String>
     ): OcrTextLine {
-        // th_PP-OCRv5_mobile_rec inference.yml: img_mode = BGR, RecResizeImg [3, 48, 320], [-1, 1], right zero-padded
+        // th_PP-OCRv5_mobile_rec inference.yml: img_mode = BGR, RecResizeImg [3, 48, 320..3200], [-1, 1], right zero-padded
         val targetH = 48
         val ratio = crop.width.toFloat() / crop.height.coerceAtLeast(1).toFloat()
-        val resizedW = (targetH * ratio).toInt().coerceIn(16, 640)
+        val resizedW = ceil(targetH * ratio).toInt().coerceIn(16, 1440)
         val paddedW = max(320, resizedW)
         val resized = Bitmap.createScaledBitmap(crop, resizedW, targetH, true)
 
