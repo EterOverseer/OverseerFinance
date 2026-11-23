@@ -9,19 +9,159 @@ import com.example.domain.ThaiTaxRulesCatalog
  * Never uses destructive fallback on user financial records.
  */
 object DatabaseMigrations {
-    const val CURRENT_SCHEMA_VERSION = 1
+    const val CURRENT_SCHEMA_VERSION = 2
 
-    /**
-     * Forward-ready migration example verifying schema evolution safety in unit tests.
-     */
     val MIGRATION_1_2 = object : Migration(1, 2) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL("CREATE INDEX IF NOT EXISTS index_transactions_taxSection ON transactions(taxSection)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS taxpayer_identities (
+                    taxYearBe INTEGER NOT NULL PRIMARY KEY,
+                    tin13 TEXT NOT NULL,
+                    titleTh TEXT NOT NULL,
+                    firstNameTh TEXT NOT NULL,
+                    lastNameTh TEXT NOT NULL,
+                    birthDateIso TEXT NOT NULL,
+                    spouseTin13 TEXT NOT NULL,
+                    spouseFirstNameTh TEXT NOT NULL,
+                    spouseLastNameTh TEXT NOT NULL,
+                    addressLine TEXT NOT NULL,
+                    subDistrict TEXT NOT NULL,
+                    district TEXT NOT NULL,
+                    province TEXT NOT NULL,
+                    postalCode TEXT NOT NULL,
+                    phone TEXT NOT NULL,
+                    email TEXT NOT NULL,
+                    updatedAtEpochMillis INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS statement_import_batches (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    bankName TEXT NOT NULL,
+                    fileName TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    rowCount INTEGER NOT NULL,
+                    importedCount INTEGER NOT NULL,
+                    duplicateCount INTEGER NOT NULL,
+                    importedAtEpochMillis INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS index_statement_import_batches_sha256 ON statement_import_batches(sha256)"
+            )
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS reconciliation_audits (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    taxYearBe INTEGER NOT NULL,
+                    transactionId TEXT NOT NULL,
+                    previousType TEXT NOT NULL,
+                    newType TEXT NOT NULL,
+                    previousTaxSection TEXT NOT NULL,
+                    newTaxSection TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    adjustedAtEpochMillis INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_reconciliation_audits_taxYearBe ON reconciliation_audits(taxYearBe)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_reconciliation_audits_transactionId ON reconciliation_audits(transactionId)"
+            )
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS tax_documents (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    taxYearBe INTEGER NOT NULL,
+                    category TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    mimeType TEXT NOT NULL,
+                    privateFilePath TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    fileSizeBytes INTEGER NOT NULL,
+                    linkedTransactionId TEXT,
+                    linkedDeductionId TEXT,
+                    ocrExtractedText TEXT NOT NULL,
+                    extractedAmountSatang INTEGER,
+                    notes TEXT NOT NULL,
+                    verificationStatus TEXT NOT NULL,
+                    createdAtEpochMillis INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_tax_documents_taxYearBe ON tax_documents(taxYearBe)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_tax_documents_sha256 ON tax_documents(sha256)"
+            )
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS tax_filing_history (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    taxYearBe INTEGER NOT NULL,
+                    formType TEXT NOT NULL,
+                    filingVersion INTEGER NOT NULL,
+                    xmlFileName TEXT NOT NULL,
+                    xmlSha256 TEXT NOT NULL,
+                    generatedAtEpochMillis INTEGER NOT NULL,
+                    totalAssessableSatang INTEGER NOT NULL,
+                    totalDeductionSatang INTEGER NOT NULL,
+                    netTaxableSatang INTEGER NOT NULL,
+                    calculatedTaxSatang INTEGER NOT NULL,
+                    withholdingSatang INTEGER NOT NULL,
+                    payableSatang INTEGER NOT NULL,
+                    refundSatang INTEGER NOT NULL,
+                    rulesetVersion TEXT NOT NULL,
+                    filingState TEXT NOT NULL,
+                    submissionRef TEXT NOT NULL,
+                    confirmationRef TEXT NOT NULL,
+                    associatedDocumentIdsJson TEXT NOT NULL,
+                    isOutdated INTEGER NOT NULL,
+                    lastDataMutationEpochMillis INTEGER NOT NULL,
+                    notes TEXT NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_tax_filing_history_taxYearBe ON tax_filing_history(taxYearBe)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_tax_filing_history_filingVersion ON tax_filing_history(filingVersion)"
+            )
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS open_api_settings (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    isEnabled INTEGER NOT NULL,
+                    providerModel TEXT NOT NULL,
+                    environment TEXT NOT NULL,
+                    clientId TEXT NOT NULL,
+                    baseUrl TEXT NOT NULL,
+                    userConsented INTEGER NOT NULL,
+                    lastAuthEpochMillis INTEGER,
+                    updatedAtEpochMillis INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
         }
     }
 
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
-        // Registered automatically as versions advance
+        MIGRATION_1_2
     )
 }
 

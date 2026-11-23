@@ -37,6 +37,16 @@ data class BackupImageManifestEntry(
 )
 
 @Serializable
+data class BackupTaxDocManifestEntry(
+    val docId: String,
+    val archivePath: String,
+    val fileName: String,
+    val mimeType: String,
+    val sha256: String,
+    val fileSizeBytes: Long
+)
+
+@Serializable
 data class BackupManifest(
     val appName: String = "OverseerFinance",
     val formatVersion: Int = 1,
@@ -47,7 +57,9 @@ data class BackupManifest(
     val imageCount: Int,
     val dbSha256: String,
     val dbSizeBytes: Long,
-    val images: List<BackupImageManifestEntry>
+    val images: List<BackupImageManifestEntry>,
+    val taxDocumentCount: Int = 0,
+    val taxDocuments: List<BackupTaxDocManifestEntry> = emptyList()
 )
 
 data class BackupPreviewResult(
@@ -57,6 +69,7 @@ data class BackupPreviewResult(
     val createdAtEpochMillis: Long,
     val transactionCount: Int,
     val imageCount: Int,
+    val taxDocumentCount: Int = 0,
     val estimatedRequiredBytes: Long,
     val integrityPassed: Boolean,
     val verificationDetails: List<String>
@@ -69,7 +82,7 @@ class BackupManagerException(message: String, cause: Throwable? = null) : Except
  *
  * Supports:
  * 1. Encrypted Full Recovery (.efbackup) via AES-256-GCM + ZIP + manifest + SHA-256 checks
- * 2. Portable Self-Contained SQLite (.sqlite) including embedded portable_image_blobs
+ * 2. Portable Self-Contained SQLite (.sqlite) including embedded portable_image_blobs & portable_tax_doc_blobs
  * 3. Pre-restore Integrity Verification & Preview
  * 4. Staged Atomic Full Restore (Option A: Replace Current Data) with automatic rollback on any failure
  */
@@ -80,6 +93,7 @@ class BackupCenterManager(
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
 
     fun vaultImagesDir(): File = File(context.filesDir, "vault_images").apply { mkdirs() }
+    fun vaultTaxDocsDir(): File = File(context.filesDir, "tax_vault_docs").apply { mkdirs() }
 
     suspend fun exportEncryptedEfBackup(
         outputStream: OutputStream,
@@ -94,7 +108,9 @@ class BackupCenterManager(
 
             val txCount = db.transactionDao().getAllOnce().size
             val storedImages = db.importedImageDao().getAllOnce()
+            val storedTaxDocs = db.taxFilingDao().getAllDocumentsOnce()
             val imageEntries = mutableListOf<BackupImageManifestEntry>()
+            val taxDocEntries = mutableListOf<BackupTaxDocManifestEntry>()
 
             val zipBuffer = ByteArrayOutputStream()
             ZipOutputStream(zipBuffer).use { zos ->
@@ -129,6 +145,33 @@ class BackupCenterManager(
                     )
                 }
 
+                // Add every Tax Document Vault file (PDF/Image)
+                for (doc in storedTaxDocs) {
+                    if (doc.privateFilePath.isBlank()) continue
+                    val file = File(doc.privateFilePath)
+                    if (!file.exists() || !file.isFile) continue
+                    val actualSha = ImageHashing.sha256(file)
+                    if (actualSha != doc.sha256) {
+                        throw BackupManagerException("ตรวจพบไฟล์เอกสารภาษีไม่ตรงกับ SHA-256: ${doc.title}")
+                    }
+                    val baseName = sanitizeFileName(file.name)
+                    val archivePath = "tax_docs/$baseName"
+                    zos.putNextEntry(ZipEntry(archivePath))
+                    FileInputStream(file).use { it.copyTo(zos) }
+                    zos.closeEntry()
+
+                    taxDocEntries.add(
+                        BackupTaxDocManifestEntry(
+                            docId = doc.id,
+                            archivePath = archivePath,
+                            fileName = baseName,
+                            mimeType = doc.mimeType,
+                            sha256 = actualSha,
+                            fileSizeBytes = file.length()
+                        )
+                    )
+                }
+
                 val manifest = BackupManifest(
                     appVersion = appVersion,
                     schemaVersion = DatabaseMigrations.CURRENT_SCHEMA_VERSION,
@@ -137,7 +180,9 @@ class BackupCenterManager(
                     imageCount = imageEntries.size,
                     dbSha256 = dbSha256,
                     dbSizeBytes = snapshotFile.length(),
-                    images = imageEntries
+                    images = imageEntries,
+                    taxDocumentCount = taxDocEntries.size,
+                    taxDocuments = taxDocEntries
                 )
                 val manifestBytes = json.encodeToString(manifest).toByteArray(Charsets.UTF_8)
                 zos.putNextEntry(ZipEntry("manifest.json"))
@@ -212,7 +257,9 @@ class BackupCenterManager(
             val portableDbFile = createConsistentDbSnapshot(db, File(stagingDir, "portable.sqlite"))
             val txCount = db.transactionDao().getAllOnce().size
             val storedImages = db.importedImageDao().getAllOnce()
+            val storedTaxDocs = db.taxFilingDao().getAllDocumentsOnce()
             val imageEntries = mutableListOf<BackupImageManifestEntry>()
+            val taxDocEntries = mutableListOf<BackupTaxDocManifestEntry>()
 
             val rawSqlite = SQLiteDatabase.openDatabase(
                 portableDbFile.absolutePath,
@@ -224,6 +271,18 @@ class BackupCenterManager(
                     """
                     CREATE TABLE IF NOT EXISTS portable_image_blobs (
                         image_id TEXT PRIMARY KEY,
+                        file_name TEXT NOT NULL,
+                        mime_type TEXT NOT NULL,
+                        sha256 TEXT NOT NULL,
+                        file_size INTEGER NOT NULL,
+                        data BLOB NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                rawSqlite.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS portable_tax_doc_blobs (
+                        doc_id TEXT PRIMARY KEY,
                         file_name TEXT NOT NULL,
                         mime_type TEXT NOT NULL,
                         sha256 TEXT NOT NULL,
@@ -275,6 +334,39 @@ class BackupCenterManager(
                         )
                     }
 
+                    for (doc in storedTaxDocs) {
+                        if (doc.privateFilePath.isBlank()) continue
+                        val file = File(doc.privateFilePath)
+                        if (!file.exists() || !file.isFile) continue
+                        val bytes = file.readBytes()
+                        val sha = ImageHashing.sha256(bytes)
+                        val fileName = sanitizeFileName(file.name)
+                        val cv = ContentValues().apply {
+                            put("doc_id", doc.id)
+                            put("file_name", fileName)
+                            put("mime_type", doc.mimeType)
+                            put("sha256", sha)
+                            put("file_size", bytes.size.toLong())
+                            put("data", bytes)
+                        }
+                        rawSqlite.insertWithOnConflict(
+                            "portable_tax_doc_blobs",
+                            null,
+                            cv,
+                            SQLiteDatabase.CONFLICT_REPLACE
+                        )
+                        taxDocEntries.add(
+                            BackupTaxDocManifestEntry(
+                                docId = doc.id,
+                                archivePath = "blob_doc:${doc.id}",
+                                fileName = fileName,
+                                mimeType = doc.mimeType,
+                                sha256 = sha,
+                                fileSizeBytes = bytes.size.toLong()
+                            )
+                        )
+                    }
+
                     val manifest = BackupManifest(
                         appVersion = appVersion,
                         schemaVersion = DatabaseMigrations.CURRENT_SCHEMA_VERSION,
@@ -283,7 +375,9 @@ class BackupCenterManager(
                         imageCount = imageEntries.size,
                         dbSha256 = "",
                         dbSizeBytes = portableDbFile.length(),
-                        images = imageEntries
+                        images = imageEntries,
+                        taxDocumentCount = taxDocEntries.size,
+                        taxDocuments = taxDocEntries
                     )
                     val manifestCv = ContentValues().apply {
                         put("key", "manifest_json")
@@ -371,7 +465,13 @@ class BackupCenterManager(
         try {
             val (_, plaintextZip) = BackupCrypto.decryptFromStream(inputStream, password)
             val staged = extractAndVerifyEfZip(plaintextZip, stagingDir)
-            performAtomicFullSwap(staged.stagedDbFile, staged.stagedImagesDir, staged.imagePathRemap)
+            performAtomicFullSwap(
+                staged.stagedDbFile,
+                staged.stagedImagesDir,
+                staged.stagedTaxDocsDir,
+                staged.imagePathRemap,
+                staged.taxDocPathRemap
+            )
             Result.success(staged.preview)
         } catch (t: Throwable) {
             Result.failure(t)
@@ -387,7 +487,13 @@ class BackupCenterManager(
                 val candidate = File(stagingDir, "candidate.sqlite")
                 FileOutputStream(candidate).use { fos -> inputStream.copyTo(fos) }
                 val staged = inspectAndStagePortableSqlite(candidate, stagingDir)
-                performAtomicFullSwap(staged.stagedDbFile, staged.stagedImagesDir, staged.imagePathRemap)
+                performAtomicFullSwap(
+                    staged.stagedDbFile,
+                    staged.stagedImagesDir,
+                    staged.stagedTaxDocsDir,
+                    staged.imagePathRemap,
+                    staged.taxDocPathRemap
+                )
                 Result.success(staged.preview)
             } catch (t: Throwable) {
                 Result.failure(t)
@@ -399,7 +505,9 @@ class BackupCenterManager(
     private data class StagedBackupBundle(
         val stagedDbFile: File,
         val stagedImagesDir: File,
+        val stagedTaxDocsDir: File,
         val imagePathRemap: Map<String, String>,
+        val taxDocPathRemap: Map<String, String>,
         val preview: BackupPreviewResult
     )
 
@@ -409,6 +517,7 @@ class BackupCenterManager(
     ): StagedBackupBundle {
         val details = mutableListOf<String>()
         val stagedImagesDir = File(stagingDir, "images").apply { mkdirs() }
+        val stagedTaxDocsDir = File(stagingDir, "tax_docs").apply { mkdirs() }
         var manifest: BackupManifest? = null
         var dbFile: File? = null
         val extractedEntries = mutableMapOf<String, File>()
@@ -429,6 +538,9 @@ class BackupCenterManager(
                         }
                         safeName.startsWith("images/") -> {
                             File(stagedImagesDir, File(safeName).name)
+                        }
+                        safeName.startsWith("tax_docs/") -> {
+                            File(stagedTaxDocsDir, File(safeName).name)
                         }
                         else -> null
                     }
@@ -468,7 +580,7 @@ class BackupCenterManager(
 
         val liveVault = vaultImagesDir()
         val remap = mutableMapOf<String, String>()
-        var totalImageBytes = 0L
+        var totalAssetBytes = 0L
         for (img in parsedManifest.images) {
             val extracted = extractedEntries[img.archivePath]
                 ?: throw BackupManagerException("ไฟล์ภาพหายไปจากชุดสำรอง: ${img.originalFileName}")
@@ -476,16 +588,34 @@ class BackupCenterManager(
             if (sha != img.sha256) {
                 throw BackupManagerException("SHA-256 ของภาพไม่ตรงกัน: ${img.originalFileName}")
             }
-            totalImageBytes += extracted.length()
+            totalAssetBytes += extracted.length()
             remap[img.imageId] = File(liveVault, extracted.name).absolutePath
         }
         details.add("ตรวจสอบภาพหลักฐานครบ ${parsedManifest.images.size} ไฟล์")
 
-        val estimated = stagedDb.length() + totalImageBytes
+        val liveTaxVault = vaultTaxDocsDir()
+        val taxRemap = mutableMapOf<String, String>()
+        for (doc in parsedManifest.taxDocuments) {
+            val extracted = extractedEntries[doc.archivePath]
+                ?: throw BackupManagerException("ไฟล์เอกสารภาษีหายไปจากชุดสำรอง: ${doc.fileName}")
+            val sha = ImageHashing.sha256(extracted)
+            if (sha != doc.sha256) {
+                throw BackupManagerException("SHA-256 ของเอกสารภาษีไม่ตรงกัน: ${doc.fileName}")
+            }
+            totalAssetBytes += extracted.length()
+            taxRemap[doc.docId] = File(liveTaxVault, extracted.name).absolutePath
+        }
+        if (parsedManifest.taxDocuments.isNotEmpty()) {
+            details.add("ตรวจสอบคลังเอกสารภาษีครบ ${parsedManifest.taxDocuments.size} ไฟล์")
+        }
+
+        val estimated = stagedDb.length() + totalAssetBytes
         return StagedBackupBundle(
             stagedDbFile = stagedDb,
             stagedImagesDir = stagedImagesDir,
+            stagedTaxDocsDir = stagedTaxDocsDir,
             imagePathRemap = remap,
+            taxDocPathRemap = taxRemap,
             preview = BackupPreviewResult(
                 format = BackupFormat.EFBACKUP,
                 appVersion = parsedManifest.appVersion,
@@ -493,6 +623,7 @@ class BackupCenterManager(
                 createdAtEpochMillis = parsedManifest.createdAtEpochMillis,
                 transactionCount = parsedManifest.transactionCount,
                 imageCount = parsedManifest.imageCount,
+                taxDocumentCount = parsedManifest.taxDocuments.size,
                 estimatedRequiredBytes = estimated,
                 integrityPassed = true,
                 verificationDetails = details
@@ -506,6 +637,7 @@ class BackupCenterManager(
     ): StagedBackupBundle {
         val details = mutableListOf<String>()
         val stagedImagesDir = File(stagingDir, "images").apply { mkdirs() }
+        val stagedTaxDocsDir = File(stagingDir, "tax_docs").apply { mkdirs() }
         val db = try {
             SQLiteDatabase.openDatabase(candidateDbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
         } catch (e: Exception) {
@@ -513,13 +645,16 @@ class BackupCenterManager(
         }
 
         val liveVault = vaultImagesDir()
+        val liveTaxVault = vaultTaxDocsDir()
         val remap = mutableMapOf<String, String>()
+        val taxRemap = mutableMapOf<String, String>()
         var txCount = 0
         var imageCount = 0
+        var taxDocCount = 0
         var createdAt = candidateDbFile.lastModified()
         var appVer = appVersion
         var schemaVer = DatabaseMigrations.CURRENT_SCHEMA_VERSION
-        var totalImageBytes = 0L
+        var totalAssetBytes = 0L
 
         try {
             verifySqliteIntegrity(db)
@@ -562,12 +697,39 @@ class BackupCenterManager(
                         val outFileName = "${imageId}_${sanitizeFileName(fileName)}"
                         File(stagedImagesDir, outFileName).writeBytes(bytes)
                         remap[imageId] = File(liveVault, outFileName).absolutePath
-                        totalImageBytes += bytes.size
+                        totalAssetBytes += bytes.size
                         imageCount++
                     }
                 }
                 details.add("ตรวจสอบภาพที่ฝังใน SQLite ครบ $imageCount ไฟล์")
                 db.execSQL("DROP TABLE IF EXISTS portable_image_blobs")
+            }
+
+            if (tableExists(db, "portable_tax_doc_blobs")) {
+                db.rawQuery(
+                    "SELECT doc_id, file_name, sha256, data FROM portable_tax_doc_blobs",
+                    null
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val docId = c.getString(0)
+                        val fileName = c.getString(1)
+                        val expectedSha = c.getString(2)
+                        val bytes = c.getBlob(3)
+                        val actualSha = ImageHashing.sha256(bytes)
+                        if (actualSha != expectedSha) {
+                            throw BackupManagerException("เอกสารภาษีใน BLOB เสียหาย (SHA-256 ไม่ตรง): $fileName")
+                        }
+                        val outFileName = sanitizeFileName(fileName)
+                        File(stagedTaxDocsDir, outFileName).writeBytes(bytes)
+                        taxRemap[docId] = File(liveTaxVault, outFileName).absolutePath
+                        totalAssetBytes += bytes.size
+                        taxDocCount++
+                    }
+                }
+                details.add("ตรวจสอบเอกสารภาษีที่ฝังใน SQLite ครบ $taxDocCount ไฟล์")
+                db.execSQL("DROP TABLE IF EXISTS portable_tax_doc_blobs")
+            }
+            if (hasManifest) {
                 db.execSQL("DROP TABLE IF EXISTS portable_backup_manifest")
             }
         } finally {
@@ -581,7 +743,9 @@ class BackupCenterManager(
         return StagedBackupBundle(
             stagedDbFile = candidateDbFile,
             stagedImagesDir = stagedImagesDir,
+            stagedTaxDocsDir = stagedTaxDocsDir,
             imagePathRemap = remap,
+            taxDocPathRemap = taxRemap,
             preview = BackupPreviewResult(
                 format = BackupFormat.SQLITE,
                 appVersion = appVer,
@@ -589,7 +753,8 @@ class BackupCenterManager(
                 createdAtEpochMillis = createdAt,
                 transactionCount = txCount,
                 imageCount = imageCount,
-                estimatedRequiredBytes = candidateDbFile.length() + totalImageBytes,
+                taxDocumentCount = taxDocCount,
+                estimatedRequiredBytes = candidateDbFile.length() + totalAssetBytes,
                 integrityPassed = true,
                 verificationDetails = details
             )
@@ -599,9 +764,11 @@ class BackupCenterManager(
     private fun performAtomicFullSwap(
         stagedDbFile: File,
         stagedImagesDir: File,
-        imagePathRemap: Map<String, String>
+        stagedTaxDocsDir: File,
+        imagePathRemap: Map<String, String>,
+        taxDocPathRemap: Map<String, String>
     ) {
-        val neededBytes = (stagedDbFile.length() + directorySize(stagedImagesDir)) * 2L + 2_000_000L
+        val neededBytes = (stagedDbFile.length() + directorySize(stagedImagesDir) + directorySize(stagedTaxDocsDir)) * 2L + 2_000_000L
         val availableBytes = availableInternalStorageBytes()
         if (availableBytes < neededBytes) {
             throw BackupManagerException(
@@ -610,64 +777,60 @@ class BackupCenterManager(
         }
 
         // Update privateFilePath references inside staged SQLite DB so paths are portable across devices
-        if (imagePathRemap.isNotEmpty()) {
-            val stagedDb = SQLiteDatabase.openDatabase(
-                stagedDbFile.absolutePath,
-                null,
-                SQLiteDatabase.OPEN_READWRITE
-            )
+        val stagedDb = SQLiteDatabase.openDatabase(
+            stagedDbFile.absolutePath,
+            null,
+            SQLiteDatabase.OPEN_READWRITE
+        )
+        try {
+            stagedDb.beginTransaction()
             try {
-                stagedDb.beginTransaction()
-                try {
-                    for ((imageId, newLivePath) in imagePathRemap) {
+                for ((imageId, newLivePath) in imagePathRemap) {
+                    stagedDb.execSQL(
+                        "UPDATE imported_images SET privateFilePath = ? WHERE id = ?",
+                        arrayOf(newLivePath, imageId)
+                    )
+                    stagedDb.execSQL(
+                        "UPDATE attachments SET localFilePath = ? WHERE importedImageId = ?",
+                        arrayOf(newLivePath, imageId)
+                    )
+                }
+                if (taxDocPathRemap.isNotEmpty() && tableExists(stagedDb, "tax_documents")) {
+                    for ((docId, newLivePath) in taxDocPathRemap) {
                         stagedDb.execSQL(
-                            "UPDATE imported_images SET privateFilePath = ? WHERE id = ?",
-                            arrayOf(newLivePath, imageId)
-                        )
-                        stagedDb.execSQL(
-                            "UPDATE attachments SET localFilePath = ? WHERE importedImageId = ?",
-                            arrayOf(newLivePath, imageId)
+                            "UPDATE tax_documents SET privateFilePath = ? WHERE id = ?",
+                            arrayOf(newLivePath, docId)
                         )
                     }
-                    // Device-specific SAF URI permissions are NOT portable across phones
-                    stagedDb.execSQL(
-                        "UPDATE scan_sources SET permissionValid = 0, lastStatus = 'กู้คืนข้อมูลแล้ว — โปรดเลือกโฟลเดอร์ K PLUS ใหม่'"
-                    )
-                    stagedDb.setTransactionSuccessful()
-                } finally {
-                    stagedDb.endTransaction()
                 }
-            } finally {
-                stagedDb.close()
-            }
-        } else {
-            val stagedDb = SQLiteDatabase.openDatabase(
-                stagedDbFile.absolutePath,
-                null,
-                SQLiteDatabase.OPEN_READWRITE
-            )
-            try {
+                // Device-specific SAF URI permissions are NOT portable across phones
                 stagedDb.execSQL(
                     "UPDATE scan_sources SET permissionValid = 0, lastStatus = 'กู้คืนข้อมูลแล้ว — โปรดเลือกโฟลเดอร์ K PLUS ใหม่'"
                 )
+                stagedDb.setTransactionSuccessful()
             } finally {
-                stagedDb.close()
+                stagedDb.endTransaction()
             }
+        } finally {
+            stagedDb.close()
         }
 
         val liveDbFile = context.getDatabasePath(AppDatabase.DB_NAME)
         val liveWal = File("${liveDbFile.absolutePath}-wal")
         val liveShm = File("${liveDbFile.absolutePath}-shm")
         val liveVault = vaultImagesDir()
+        val liveTaxVault = vaultTaxDocsDir()
 
         val rollbackDir = File(context.cacheDir, "restore_rollback_${UUID.randomUUID()}").apply { mkdirs() }
         val rollbackDb = File(rollbackDir, "rollback.db")
         val rollbackVault = File(rollbackDir, "vault_images").apply { mkdirs() }
+        val rollbackTaxVault = File(rollbackDir, "tax_vault_docs").apply { mkdirs() }
 
         // Save rollback copy of current live state before touching anything
         AppDatabase.closeAndClearInstance()
         if (liveDbFile.exists()) liveDbFile.copyTo(rollbackDb, overwrite = true)
         if (liveVault.exists()) liveVault.copyRecursively(rollbackVault, overwrite = true)
+        if (liveTaxVault.exists()) liveTaxVault.copyRecursively(rollbackTaxVault, overwrite = true)
 
         try {
             liveDbFile.parentFile?.mkdirs()
@@ -685,7 +848,17 @@ class BackupCenterManager(
                 }
             }
 
-            // Verify reopened Room database succeeds
+            liveTaxVault.deleteRecursively()
+            liveTaxVault.mkdirs()
+            if (stagedTaxDocsDir.exists()) {
+                stagedTaxDocsDir.listFiles()?.forEach { file ->
+                    if (file.isFile) {
+                        file.copyTo(File(liveTaxVault, file.name), overwrite = true)
+                    }
+                }
+            }
+
+            // Verify reopened Room database succeeds (triggers MIGRATION_1_2 automatically if v1 backup)
             val reopened = AppDatabase.getInstance(context)
             reopened.openHelper.readableDatabase.query("PRAGMA integrity_check").use { c ->
                 if (!c.moveToFirst() || c.getString(0).lowercase() != "ok") {
@@ -701,6 +874,9 @@ class BackupCenterManager(
             liveVault.deleteRecursively()
             liveVault.mkdirs()
             rollbackVault.copyRecursively(liveVault, overwrite = true)
+            liveTaxVault.deleteRecursively()
+            liveTaxVault.mkdirs()
+            rollbackTaxVault.copyRecursively(liveTaxVault, overwrite = true)
             AppDatabase.getInstance(context)
             throw BackupManagerException("กู้คืนข้อมูลล้มเหลว ระบบได้ย้อนกลับข้อมูลเดิมอย่างปลอดภัย: ${t.message}", t)
         } finally {

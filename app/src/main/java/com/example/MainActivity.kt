@@ -113,9 +113,17 @@ fun OverseerAppRoot(viewModel: OverseerViewModel = viewModel()) {
     val debtRepayments by viewModel.debtRepayments.collectAsStateWithLifecycle()
     val taxYears by viewModel.taxYears.collectAsStateWithLifecycle()
     val taxProfile by viewModel.taxProfile.collectAsStateWithLifecycle()
+    val taxpayerIdentity by viewModel.taxpayerIdentity.collectAsStateWithLifecycle()
     val taxDeductions by viewModel.taxDeductions.collectAsStateWithLifecycle()
     val withholding by viewModel.withholdingRecords.collectAsStateWithLifecycle()
+    val taxDocuments by viewModel.taxDocuments.collectAsStateWithLifecycle()
+    val statementImportBatches by viewModel.statementImportBatches.collectAsStateWithLifecycle()
+    val reconciliationAudits by viewModel.reconciliationAudits.collectAsStateWithLifecycle()
+    val taxFilingHistory by viewModel.taxFilingHistory.collectAsStateWithLifecycle()
+    val openApiSettings by viewModel.openApiSettings.collectAsStateWithLifecycle()
     val taxReport by viewModel.taxReport.collectAsStateWithLifecycle()
+    val taxWorkspaceSummary by viewModel.taxWorkspaceSummary.collectAsStateWithLifecycle()
+    val taxFeedback by viewModel.taxFeedback.collectAsStateWithLifecycle()
     val backupUiState by viewModel.backupUiState.collectAsStateWithLifecycle()
     val backupHistory by viewModel.backupHistory.collectAsStateWithLifecycle()
 
@@ -296,16 +304,43 @@ fun OverseerAppRoot(viewModel: OverseerViewModel = viewModel()) {
                             TaxScreen(
                                 selectedYearBe = prefs.selectedTaxYearBe,
                                 taxYears = taxYears,
+                                accounts = accounts,
+                                transactions = transactions,
                                 profile = taxProfile,
+                                identity = taxpayerIdentity,
                                 deductions = taxDeductions,
                                 withholdingRecords = withholding,
+                                taxDocuments = taxDocuments,
+                                importBatches = statementImportBatches,
+                                reconciliationAudits = reconciliationAudits,
+                                filingHistory = taxFilingHistory,
+                                openApiSettings = openApiSettings,
                                 report = taxReport,
+                                workspaceSummary = taxWorkspaceSummary,
+                                taxFeedback = taxFeedback,
+                                dateFormat = prefs.dateFormat,
+                                onClearFeedback = viewModel::clearTaxFeedback,
                                 onSelectYear = viewModel::setTaxYearBe,
                                 onSaveProfile = viewModel::saveTaxProfile,
+                                onSaveIdentity = viewModel::saveTaxpayerIdentity,
                                 onSaveDeduction = viewModel::saveTaxDeduction,
                                 onDeleteDeduction = viewModel::deleteTaxDeduction,
                                 onSaveWithholding = viewModel::saveWithholding,
                                 onDeleteWithholding = viewModel::deleteWithholding,
+                                onImportCsv = viewModel::importBankStatementCsv,
+                                onReclassifyTx = viewModel::reclassifyTransactionWithAudit,
+                                onImportTaxDoc = { uri, cat, title, notes ->
+                                    viewModel.importTaxDocument(uri, cat, title, notes)
+                                },
+                                onConfirmTaxDoc = viewModel::confirmTaxDocument,
+                                onRejectTaxDoc = viewModel::rejectTaxDocument,
+                                onDeleteTaxDoc = viewModel::deleteTaxDocument,
+                                onSaveOpenApiSettings = viewModel::saveOpenApiSettings,
+                                onAttemptOfficialXmlExport = viewModel::attemptOfficialXmlExport,
+                                onExportFilingPrepPdf = viewModel::exportFilingPreparationPdf,
+                                onUpdateFilingState = { entry, newState, ref ->
+                                    viewModel.updateFilingHistoryState(entry, newState, submissionRef = ref)
+                                },
                                 onExportTaxPdf = { uri ->
                                     viewModel.exportPdfToUri(
                                         uri = uri,

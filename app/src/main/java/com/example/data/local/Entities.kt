@@ -79,6 +79,7 @@ data class ContactEntity(
         Index(value = ["toAccountId"]),
         Index(value = ["contactId"]),
         Index(value = ["type"]),
+        Index(value = ["taxSection"]),
         Index(value = ["reviewStatus"])
     ]
 )

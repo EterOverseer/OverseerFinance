@@ -13,14 +13,22 @@ import com.example.data.local.DebtEntity
 import com.example.data.local.DebtRepaymentEntity
 import com.example.data.local.ImportedImageEntity
 import com.example.data.local.OcrResultEntity
+import com.example.data.local.OpenApiSettingsEntity
+import com.example.data.local.ReconciliationAuditEntity
 import com.example.data.local.RecurringTransactionEntity
 import com.example.data.local.ReviewStatus
 import com.example.data.local.ScanSourceEntity
+import com.example.data.local.StatementImportBatchEntity
 import com.example.data.local.TaxDeductionEntity
+import com.example.data.local.TaxDocumentEntity
+import com.example.data.local.TaxFilingHistoryEntity
+import com.example.data.local.TaxFilingState
+import com.example.data.local.TaxFormType
 import com.example.data.local.TaxProfileEntity
 import com.example.data.local.TaxRuleEntity
 import com.example.data.local.TaxSection
 import com.example.data.local.TaxYearEntity
+import com.example.data.local.TaxpayerIdentityEntity
 import com.example.data.local.TransactionEntity
 import com.example.data.local.TransactionSource
 import com.example.data.local.TransactionType
@@ -55,11 +63,18 @@ class FinanceRepository(private val context: Context) {
     val debtRepayments: Flow<List<DebtRepaymentEntity>> get() = db.debtDao().observeAllRepayments()
     val taxYears: Flow<List<TaxYearEntity>> get() = db.taxDao().observeTaxYears()
     val backupHistory: Flow<List<BackupHistoryEntity>> get() = db.backupHistoryDao().observeAll()
+    val statementImportBatches: Flow<List<StatementImportBatchEntity>> get() = db.taxFilingDao().observeImportBatches()
+    val allFilingHistory: Flow<List<TaxFilingHistoryEntity>> get() = db.taxFilingDao().observeAllFilingHistory()
+    val openApiSettings: Flow<OpenApiSettingsEntity?> get() = db.taxFilingDao().observeOpenApiSettings()
 
     fun observeTaxProfile(yearBe: Int): Flow<TaxProfileEntity?> = db.taxDao().observeProfile(yearBe)
     fun observeTaxRule(yearBe: Int): Flow<TaxRuleEntity?> = db.taxDao().observeRule(yearBe)
     fun observeTaxDeductions(yearBe: Int): Flow<List<TaxDeductionEntity>> = db.taxDao().observeDeductions(yearBe)
     fun observeWithholding(yearBe: Int): Flow<List<WithholdingRecordEntity>> = db.taxDao().observeWithholding(yearBe)
+    fun observeTaxpayerIdentity(yearBe: Int): Flow<TaxpayerIdentityEntity?> = db.taxFilingDao().observeIdentity(yearBe)
+    fun observeReconciliationAudits(yearBe: Int): Flow<List<ReconciliationAuditEntity>> = db.taxFilingDao().observeAudits(yearBe)
+    fun observeTaxDocuments(yearBe: Int): Flow<List<TaxDocumentEntity>> = db.taxFilingDao().observeDocuments(yearBe)
+    fun observeTaxFilingHistory(yearBe: Int): Flow<List<TaxFilingHistoryEntity>> = db.taxFilingDao().observeFilingHistory(yearBe)
 
     suspend fun ensureInitialized() {
         val currentAccounts = db.accountDao().getActiveOnce()
@@ -81,6 +96,9 @@ class FinanceRepository(private val context: Context) {
                 listOf(com.example.domain.ThaiTaxRulesCatalog.createRuleEntityForYear(currentYearBe))
             )
         }
+        if (db.taxFilingDao().getOpenApiSettingsOnce() == null) {
+            db.taxFilingDao().upsertOpenApiSettings(OpenApiSettingsEntity())
+        }
     }
 
     suspend fun saveAccount(account: AccountEntity) = db.accountDao().upsert(account)
@@ -91,9 +109,49 @@ class FinanceRepository(private val context: Context) {
 
     suspend fun saveTransaction(tx: TransactionEntity) {
         db.transactionDao().upsert(tx.copy(updatedAtEpochMillis = System.currentTimeMillis()))
+        val yearBe = ThaiDateFormatter.toBangkokDate(tx.timestampEpochMillis).year + 543
+        db.taxFilingDao().markActiveXmlOutdated(yearBe)
     }
 
-    suspend fun deleteTransaction(tx: TransactionEntity) = db.transactionDao().delete(tx)
+    suspend fun deleteTransaction(tx: TransactionEntity) {
+        db.transactionDao().delete(tx)
+        val yearBe = ThaiDateFormatter.toBangkokDate(tx.timestampEpochMillis).year + 543
+        db.taxFilingDao().markActiveXmlOutdated(yearBe)
+    }
+
+    suspend fun reclassifyTransactionWithAudit(
+        tx: TransactionEntity,
+        newType: TransactionType,
+        newTaxSection: TaxSection,
+        newIsBusiness: Boolean = tx.isBusiness,
+        newReviewStatus: ReviewStatus = ReviewStatus.VERIFIED,
+        reason: String = "ผู้ใช้ยืนยันการจัดประเภทภาษี"
+    ) {
+        val yearBe = ThaiDateFormatter.toBangkokDate(tx.timestampEpochMillis).year + 543
+        if (tx.type != newType || tx.taxSection != newTaxSection) {
+            db.taxFilingDao().insertAudit(
+                ReconciliationAuditEntity(
+                    taxYearBe = yearBe,
+                    transactionId = tx.id,
+                    previousType = tx.type,
+                    newType = newType,
+                    previousTaxSection = tx.taxSection,
+                    newTaxSection = newTaxSection,
+                    reason = reason
+                )
+            )
+        }
+        db.transactionDao().upsert(
+            tx.copy(
+                type = newType,
+                taxSection = newTaxSection,
+                isBusiness = newIsBusiness,
+                reviewStatus = newReviewStatus,
+                updatedAtEpochMillis = System.currentTimeMillis()
+            )
+        )
+        db.taxFilingDao().markActiveXmlOutdated(yearBe)
+    }
 
     suspend fun addAttachment(attachment: AttachmentEntity) = db.attachmentDao().upsert(attachment)
 
@@ -148,11 +206,74 @@ class FinanceRepository(private val context: Context) {
         db.debtDao().recordRepayment(debt, repayment)
     }
 
-    suspend fun saveTaxProfile(profile: TaxProfileEntity) = db.taxDao().upsertProfile(profile)
-    suspend fun saveTaxDeduction(deduction: TaxDeductionEntity) = db.taxDao().upsertDeduction(deduction)
-    suspend fun deleteTaxDeduction(deduction: TaxDeductionEntity) = db.taxDao().deleteDeduction(deduction)
-    suspend fun saveWithholding(record: WithholdingRecordEntity) = db.taxDao().upsertWithholding(record)
-    suspend fun deleteWithholding(record: WithholdingRecordEntity) = db.taxDao().deleteWithholding(record)
+    suspend fun saveTaxProfile(profile: TaxProfileEntity) {
+        db.taxDao().upsertProfile(profile.copy(updatedAtEpochMillis = System.currentTimeMillis()))
+        db.taxFilingDao().markActiveXmlOutdated(profile.taxYearBe)
+    }
+
+    suspend fun saveTaxDeduction(deduction: TaxDeductionEntity) {
+        db.taxDao().upsertDeduction(deduction)
+        db.taxFilingDao().markActiveXmlOutdated(deduction.taxYearBe)
+    }
+
+    suspend fun deleteTaxDeduction(deduction: TaxDeductionEntity) {
+        db.taxDao().deleteDeduction(deduction)
+        db.taxFilingDao().markActiveXmlOutdated(deduction.taxYearBe)
+    }
+
+    suspend fun saveWithholding(record: WithholdingRecordEntity) {
+        db.taxDao().upsertWithholding(record)
+        db.taxFilingDao().markActiveXmlOutdated(record.taxYearBe)
+    }
+
+    suspend fun deleteWithholding(record: WithholdingRecordEntity) {
+        db.taxDao().deleteWithholding(record)
+        db.taxFilingDao().markActiveXmlOutdated(record.taxYearBe)
+    }
+
+    suspend fun saveTaxpayerIdentity(identity: TaxpayerIdentityEntity) {
+        db.taxFilingDao().upsertIdentity(identity.copy(updatedAtEpochMillis = System.currentTimeMillis()))
+        db.taxFilingDao().markActiveXmlOutdated(identity.taxYearBe)
+    }
+
+    suspend fun saveTaxDocument(doc: TaxDocumentEntity) {
+        db.taxFilingDao().upsertDocument(doc)
+        db.taxFilingDao().markActiveXmlOutdated(doc.taxYearBe)
+    }
+
+    suspend fun deleteTaxDocument(doc: TaxDocumentEntity) {
+        db.taxFilingDao().deleteDocument(doc)
+        db.taxFilingDao().markActiveXmlOutdated(doc.taxYearBe)
+    }
+
+    suspend fun nextFilingVersion(yearBe: Int, formType: TaxFormType): Int {
+        return (db.taxFilingDao().getMaxFilingVersion(yearBe, formType) ?: 0) + 1
+    }
+
+    suspend fun saveFilingHistory(entry: TaxFilingHistoryEntity) {
+        db.taxFilingDao().upsertFilingHistory(entry)
+    }
+
+    suspend fun updateFilingState(
+        entry: TaxFilingHistoryEntity,
+        newState: TaxFilingState,
+        submissionRef: String = entry.submissionRef,
+        confirmationRef: String = entry.confirmationRef,
+        notes: String = entry.notes
+    ) {
+        db.taxFilingDao().upsertFilingHistory(
+            entry.copy(
+                filingState = newState,
+                submissionRef = submissionRef,
+                confirmationRef = confirmationRef,
+                notes = notes
+            )
+        )
+    }
+
+    suspend fun saveOpenApiSettings(settings: OpenApiSettingsEntity) {
+        db.taxFilingDao().upsertOpenApiSettings(settings.copy(updatedAtEpochMillis = System.currentTimeMillis()))
+    }
 
     companion object {
         /**

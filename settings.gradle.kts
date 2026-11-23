@@ -25,3 +25,4 @@ dependencyResolutionManagement {
 rootProject.name = "OverseerFinance"
 
 include(":app")
+include(":rd-connector")

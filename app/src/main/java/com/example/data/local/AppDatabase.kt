@@ -52,6 +52,21 @@ class OverseerConverters {
 
     @TypeConverter fun fromBackupStatus(v: BackupStatus): String = v.name
     @TypeConverter fun toBackupStatus(v: String): BackupStatus = BackupStatus.valueOf(v)
+
+    @TypeConverter fun fromTaxFormType(v: TaxFormType): String = v.name
+    @TypeConverter fun toTaxFormType(v: String): TaxFormType = TaxFormType.valueOf(v)
+
+    @TypeConverter fun fromTaxFilingState(v: TaxFilingState): String = v.name
+    @TypeConverter fun toTaxFilingState(v: String): TaxFilingState = TaxFilingState.valueOf(v)
+
+    @TypeConverter fun fromTaxDocumentCategory(v: TaxDocumentCategory): String = v.name
+    @TypeConverter fun toTaxDocumentCategory(v: String): TaxDocumentCategory = TaxDocumentCategory.valueOf(v)
+
+    @TypeConverter fun fromDocumentVerificationStatus(v: DocumentVerificationStatus): String = v.name
+    @TypeConverter fun toDocumentVerificationStatus(v: String): DocumentVerificationStatus = DocumentVerificationStatus.valueOf(v)
+
+    @TypeConverter fun fromRdOpenApiProviderModel(v: RdOpenApiProviderModel): String = v.name
+    @TypeConverter fun toRdOpenApiProviderModel(v: String): RdOpenApiProviderModel = RdOpenApiProviderModel.valueOf(v)
 }
 
 @Database(
@@ -75,7 +90,13 @@ class OverseerConverters {
         TaxDeductionEntity::class,
         WithholdingRecordEntity::class,
         AppSettingEntity::class,
-        BackupHistoryEntity::class
+        BackupHistoryEntity::class,
+        TaxpayerIdentityEntity::class,
+        StatementImportBatchEntity::class,
+        ReconciliationAuditEntity::class,
+        TaxDocumentEntity::class,
+        TaxFilingHistoryEntity::class,
+        OpenApiSettingsEntity::class
     ],
     version = DatabaseMigrations.CURRENT_SCHEMA_VERSION,
     exportSchema = false
@@ -97,6 +118,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun taxDao(): TaxDao
     abstract fun appSettingDao(): AppSettingDao
     abstract fun backupHistoryDao(): BackupHistoryDao
+    abstract fun taxFilingDao(): TaxFilingDao
 
     companion object {
         const val DB_NAME = "overseer_finance.db"

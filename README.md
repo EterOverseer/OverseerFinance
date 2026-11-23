@@ -17,9 +17,16 @@ OverseerFinance is a native Kotlin + Jetpack Compose personal and small-business
   - `FinancialIntelligenceEngine`: Rule-based offline analytics over stored transactions.
   - `BackupCenterManager` & `BackupCrypto`: AES-256-GCM + PBKDF2-HMAC-SHA256 `.efbackup` archives, portable `.sqlite` exports with embedded `portable_image_blobs`, and atomic staged Full Restore with rollback.
 - **Data & Background Layer (`com.example.data`, `com.example.worker`, `com.example.notifications`)**:
-  - 20 normalized Room SQLite tables (`AppDatabase`).
+  - 26 normalized Room SQLite tables (`AppDatabase` v2 with explicit `MIGRATION_1_2`).
   - Storage Access Framework (`ACTION_OPEN_DOCUMENT_TREE`) K PLUS scanner + `WorkManager` periodic/manual scanning + K Plus Storage Cleaner.
   - Offline local notifications via `AlarmManager` + `BroadcastReceiver`.
+- **Advanced Thai Personal Tax Filing (`com.example.tax`)**:
+  - **Tax Center → Annual Tax Filing Workspace**: 10-section annual preparation workspace (`OVERVIEW`, `RECONCILIATION`, `DEDUCTIONS`, `WITHHOLDING`, `VAULT`, `CALCULATOR`, `CHECKLIST`, `XML_HANDOFF`, `OPEN_API`, `HISTORY`).
+  - **Bank Statement CSV Reconciliation (`BankStatementReconciler`)**: Configurable bank presets (KBank, SCB, KTB, BBL, Custom), UTF-8 & TIS-620/Windows-874 decoding, SHA-256 batch deduplication, transaction matching across K PLUS slips & manual entries, mandatory user review (deposits are never auto-taxed), and `ReconciliationAuditEntity` change logging.
+  - **Extended Form & Readiness Engine (`ThaiTaxFilingEngine`)**: Statutory eligibility checks for **ภ.ง.ด.91**, **ภ.ง.ด.90**, and half-year **ภ.ง.ด.94** (40(5)–40(8)), Thai 13-digit TIN modulus-11 checksum validation, itemized readiness checklist (zero fake percentages), and missing evidence detection.
+  - **Tax Document Vault (`TaxDocumentVaultManager`)**: SAF PDF/image import into `filesDir/tax_vault_docs/` with SHA-256 verification, optional local OCR, mandatory user confirmation (`PENDING_REVIEW` -> `USER_CONFIRMED`), and full `.efbackup` & `.sqlite` backup/restore integration.
+  - **Official RD XML Public & e-Filing Handoff (`RdXmlPublicEngine`)**: Strict UTF-8 serializer driven by `RdXmlSpecDescriptor`. Built-in registry marks official RD XML XSD tags as unverified (`OFFICIAL_SPEC_NOT_VERIFIED`) until an official XSD package from `https://efiling.rd.go.th/rd-cms/tax?_target=system` is loaded — **never fabricates XML tags**. Provides offline PDF e-Filing preparation sheets, external browser handoff to `https://efiling.rd.go.th/rd-cms/`, and versioned `TaxFilingHistoryEntity` tracking with automatic `isOutdated` flagging when underlying data changes.
+  - **Future RD Open API Abstraction & `:rd-connector` Isolation (`TaxSubmissionProvider`, `:rd-connector`)**: `LocalXmlExportProvider` (offline, active) and `FutureRdOpenApiProvider` (disabled by default; HTTPS-only, token expiry, idempotency keys, zero credential logging). Network transport (`RdOpenApiHttpTransport`) is strictly isolated in the unlinked `:rd-connector` Gradle library module so the core `:app` APK never declares `INTERNET`.
 
 ## Offline PaddleOCR Model Setup
 
@@ -33,9 +40,24 @@ Until those `.onnx` binaries are added, OverseerFinance honestly reports `MISSIN
 ## Build & Test Commands
 
 ```bash
-# Build debug APK
+# Build offline app debug APK (verified zero INTERNET permission)
 gradle :app:assembleDebug
+
+# Build isolated optional RD Open API connector library
+gradle :rd-connector:assembleDebug
 
 # Run unit & Robolectric integration tests
 gradle :app:testDebugUnitTest
 ```
+
+## GitHub Actions APK Build
+
+The repository includes `.github/workflows/build-apk.yml`, which runs on pushes/PRs to `main` / `master` and manual `workflow_dispatch`:
+
+- Sets up Temurin JDK 21 and Gradle 9.3.1, restores `debug.keystore` from `debug.keystore.base64`, runs `:app:testDebugUnitTest`, and builds `:app:assembleDebug` + `:rd-connector:assembleDebug`.
+- Uploads `OverseerFinance-debug-apk` as a downloadable GitHub Actions artifact.
+- To build a signed Release APK via **Actions → Build Android APK → Run workflow (`release` or `all`)**, configure these GitHub Repository Secrets (with key alias `upload`):
+  - `RELEASE_KEYSTORE_BASE64`: Base64-encoded `.jks` keystore
+  - `STORE_PASSWORD`: Keystore password
+  - `KEY_PASSWORD`: Key password
+

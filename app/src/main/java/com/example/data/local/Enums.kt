@@ -18,6 +18,7 @@ enum class TransactionType(val labelTh: String, val isCashInflow: Boolean, val a
 enum class TransactionSource(val labelTh: String) {
     MANUAL("บันทึกด้วยตนเอง"),
     K_PLUS_OCR("สแกนจาก K PLUS"),
+    BANK_STATEMENT("นำเข้ารายการเดินบัญชี (CSV)"),
     RECURRING("รายการประจำ"),
     DEBT_REPAYMENT("ชำระหนี้")
 }

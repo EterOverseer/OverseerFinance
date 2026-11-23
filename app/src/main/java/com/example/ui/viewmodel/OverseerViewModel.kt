@@ -16,17 +16,29 @@ import com.example.data.local.DateDisplayFormat
 import com.example.data.local.DebtEntity
 import com.example.data.local.DebtRepaymentEntity
 import com.example.data.local.DebtStatus
+import com.example.data.local.DocumentVerificationStatus
+import com.example.data.local.DeductionType
 import com.example.data.local.ImportedImageEntity
 import com.example.data.local.OcrModelStatus
 import com.example.data.local.OcrResultEntity
+import com.example.data.local.OpenApiSettingsEntity
 import com.example.data.local.PeriodFilter
+import com.example.data.local.ReconciliationAuditEntity
 import com.example.data.local.RecurringTransactionEntity
 import com.example.data.local.ReviewStatus
 import com.example.data.local.ScanSourceEntity
+import com.example.data.local.StatementImportBatchEntity
 import com.example.data.local.TaxDeductionEntity
+import com.example.data.local.TaxDocumentCategory
+import com.example.data.local.TaxDocumentEntity
+import com.example.data.local.TaxFilingHistoryEntity
+import com.example.data.local.TaxFilingState
+import com.example.data.local.TaxFormType
 import com.example.data.local.TaxProfileEntity
 import com.example.data.local.TaxRuleEntity
+import com.example.data.local.TaxSection
 import com.example.data.local.TaxYearEntity
+import com.example.data.local.TaxpayerIdentityEntity
 import com.example.data.local.ThemeMode
 import com.example.data.local.TransactionEntity
 import com.example.data.local.TransactionType
@@ -45,6 +57,15 @@ import com.example.domain.ThaiDateFormatter
 import com.example.domain.ThaiTaxEngine
 import com.example.domain.ThaiTaxRulesCatalog
 import com.example.notifications.ReminderScheduler
+import com.example.tax.api.LocalXmlExportProvider
+import com.example.tax.api.TaxSubmissionRequest
+import com.example.tax.engine.AnnualTaxWorkspaceSummary
+import com.example.tax.engine.ThaiTaxFilingEngine
+import com.example.tax.reconciliation.BankCsvColumnMapping
+import com.example.tax.reconciliation.BankStatementReconciler
+import com.example.tax.vault.TaxDocumentVaultManager
+import com.example.tax.xml.RdXmlPublicSerializer
+import com.example.tax.xml.RdXmlSpecificationRegistry
 import com.example.ui.components.MonthlyChartPoint
 import com.example.worker.CleanerDeleteResult
 import com.example.worker.KPlusScanWorker
@@ -100,9 +121,13 @@ class OverseerViewModel(application: Application) : AndroidViewModel(application
     private val scannerPipeline = KPlusScannerPipeline(application)
     private val backupManager = BackupCenterManager(application)
     private val ocrEngine = PaddleOcrEngine(application)
+    private val taxDocVaultManager = TaxDocumentVaultManager(application)
+    private val localXmlProvider = LocalXmlExportProvider()
 
     private val _periodFilter = MutableStateFlow(PeriodFilter.THIS_MONTH)
     private val _customRange = MutableStateFlow<Pair<Long?, Long?>>(null to null)
+    private val _taxFeedback = MutableStateFlow<String?>(null)
+    val taxFeedback: StateFlow<String?> = _taxFeedback.asStateFlow()
 
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
@@ -179,6 +204,32 @@ class OverseerViewModel(application: Application) : AndroidViewModel(application
         .flatMapLatest { repo.observeWithholding(it.selectedTaxYearBe) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val taxpayerIdentity: StateFlow<TaxpayerIdentityEntity?> = preferences
+        .flatMapLatest { repo.observeTaxpayerIdentity(it.selectedTaxYearBe) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val reconciliationAudits: StateFlow<List<ReconciliationAuditEntity>> = preferences
+        .flatMapLatest { repo.observeReconciliationAudits(it.selectedTaxYearBe) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val statementImportBatches: StateFlow<List<StatementImportBatchEntity>> = repo.statementImportBatches
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val taxDocuments: StateFlow<List<TaxDocumentEntity>> = preferences
+        .flatMapLatest { repo.observeTaxDocuments(it.selectedTaxYearBe) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val taxFilingHistory: StateFlow<List<TaxFilingHistoryEntity>> = preferences
+        .flatMapLatest { repo.observeTaxFilingHistory(it.selectedTaxYearBe) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val openApiSettings: StateFlow<OpenApiSettingsEntity> = repo.openApiSettings
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), OpenApiSettingsEntity())
+        .let { flow ->
+            combine(flow) { arr -> arr[0] ?: OpenApiSettingsEntity() }
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), OpenApiSettingsEntity())
+        }
+
     val taxReport: StateFlow<TaxCalculationReport?> = combine(
         preferences,
         taxProfile,
@@ -210,6 +261,55 @@ class OverseerViewModel(application: Application) : AndroidViewModel(application
             confirmedDeductions = deductions,
             withholdingRecords = withheld,
             additional408BusinessExpenseSatang = bizExpense408
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val taxWorkspaceSummary: StateFlow<AnnualTaxWorkspaceSummary?> = combine(
+        preferences,
+        taxRule,
+        taxProfile,
+        taxpayerIdentity,
+        transactions,
+        taxDeductions,
+        withholdingRecords,
+        taxDocuments,
+        taxReport
+    ) { arr ->
+        val pref = arr[0] as UserPreferences
+        val rule = (arr[1] as? TaxRuleEntity) ?: ThaiTaxRulesCatalog.createRuleEntityForYear(pref.selectedTaxYearBe)
+        val profile = (arr[2] as? TaxProfileEntity) ?: TaxProfileEntity(pref.selectedTaxYearBe)
+        val identity = arr[3] as? TaxpayerIdentityEntity
+        @Suppress("UNCHECKED_CAST")
+        val txs = arr[4] as List<TransactionEntity>
+        @Suppress("UNCHECKED_CAST")
+        val deductions = arr[5] as List<TaxDeductionEntity>
+        @Suppress("UNCHECKED_CAST")
+        val withheld = arr[6] as List<WithholdingRecordEntity>
+        @Suppress("UNCHECKED_CAST")
+        val docs = arr[7] as List<TaxDocumentEntity>
+        val report = arr[8] as? TaxCalculationReport ?: return@combine null
+
+        val recForm = ThaiTaxFilingEngine.determineFormEligibility(
+            taxYearBe = pref.selectedTaxYearBe,
+            profile = profile,
+            transactions = txs,
+            withholdingRecords = withheld,
+            report = report
+        ).recommendedForm
+        val xmlSpecVerified = recForm != null &&
+            RdXmlSpecificationRegistry.getSpecFor(recForm, pref.selectedTaxYearBe).isOfficiallyVerified
+
+        ThaiTaxFilingEngine.buildWorkspaceSummary(
+            taxYearBe = pref.selectedTaxYearBe,
+            rule = rule,
+            profile = profile,
+            identity = identity,
+            transactions = txs,
+            deductions = deductions,
+            withholdingRecords = withheld,
+            documents = docs,
+            report = report,
+            officialXmlSpecVerified = xmlSpecVerified
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
@@ -467,6 +567,255 @@ class OverseerViewModel(application: Application) : AndroidViewModel(application
     fun deleteTaxDeduction(deduction: TaxDeductionEntity) = viewModelScope.launch { repo.deleteTaxDeduction(deduction) }
     fun saveWithholding(record: WithholdingRecordEntity) = viewModelScope.launch { repo.saveWithholding(record) }
     fun deleteWithholding(record: WithholdingRecordEntity) = viewModelScope.launch { repo.deleteWithholding(record) }
+    fun saveTaxpayerIdentity(identity: TaxpayerIdentityEntity) = viewModelScope.launch {
+        repo.saveTaxpayerIdentity(identity)
+        _taxFeedback.value = "บันทึกข้อมูลผู้เสียภาษีปี ${identity.taxYearBe} แล้ว"
+    }
+
+    fun reclassifyTransactionWithAudit(
+        tx: TransactionEntity,
+        newType: TransactionType,
+        newTaxSection: TaxSection,
+        newIsBusiness: Boolean,
+        newReviewStatus: ReviewStatus = ReviewStatus.VERIFIED,
+        reason: String = "ผู้ใช้จัดประเภทภาษีจากหน้า Tax Center"
+    ) = viewModelScope.launch {
+        repo.reclassifyTransactionWithAudit(tx, newType, newTaxSection, newIsBusiness, newReviewStatus, reason)
+        _taxFeedback.value = "อัปเดตการจัดประเภทภาษีและบันทึก Audit Log แล้ว"
+    }
+
+    fun importBankStatementCsv(
+        uri: Uri,
+        fileName: String,
+        accountId: String,
+        mapping: BankCsvColumnMapping
+    ) = viewModelScope.launch(Dispatchers.IO) {
+        val outcome = runCatching {
+            val bytes = getApplication<Application>().contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: error("ไม่สามารถเปิดอ่านไฟล์ CSV ได้")
+            BankStatementReconciler.importCsvIntoDatabase(
+                db = AppDatabase.getInstance(getApplication()),
+                rawBytes = bytes,
+                fileName = fileName,
+                accountId = accountId,
+                mapping = mapping
+            )
+        }
+        withContext(Dispatchers.Main) {
+            _taxFeedback.value = outcome.fold(
+                onSuccess = { it.messageTh },
+                onFailure = { "นำเข้า CSV ไม่สำเร็จ: ${it.message}" }
+            )
+        }
+    }
+
+    fun importTaxDocument(
+        uri: Uri,
+        category: TaxDocumentCategory,
+        title: String,
+        notes: String,
+        linkedTransactionId: String? = null,
+        linkedDeductionId: String? = null
+    ) = viewModelScope.launch(Dispatchers.IO) {
+        val yearBe = preferences.value.selectedTaxYearBe
+        val result = taxDocVaultManager.importFromUri(
+            sourceUri = uri,
+            taxYearBe = yearBe,
+            category = category,
+            customTitle = title,
+            notes = notes,
+            linkedTransactionId = linkedTransactionId,
+            linkedDeductionId = linkedDeductionId
+        )
+        result.onSuccess { doc ->
+            repo.saveTaxDocument(doc)
+        }
+        withContext(Dispatchers.Main) {
+            _taxFeedback.value = result.fold(
+                onSuccess = { "นำเข้า '${it.title}' ลงคลังเอกสารแล้ว (รอผู้ใช้ยืนยันสิทธิ)" },
+                onFailure = { "นำเข้าเอกสารไม่สำเร็จ: ${it.message}" }
+            )
+        }
+    }
+
+    fun confirmTaxDocument(
+        doc: TaxDocumentEntity,
+        deductionAmountSatang: Long? = null,
+        deductionType: DeductionType? = null
+    ) = viewModelScope.launch {
+        var linkedDedId = doc.linkedDeductionId
+        if (deductionAmountSatang != null && deductionAmountSatang > 0L && deductionType != null) {
+            val createdDed = taxDocVaultManager.buildConfirmedDeductionFromDocument(
+                doc = doc,
+                amountSatang = deductionAmountSatang,
+                deductionType = deductionType
+            )
+            repo.saveTaxDeduction(createdDed)
+            linkedDedId = createdDed.id
+        }
+        repo.saveTaxDocument(
+            doc.copy(
+                verificationStatus = DocumentVerificationStatus.USER_CONFIRMED,
+                linkedDeductionId = linkedDedId
+            )
+        )
+        _taxFeedback.value = "ยืนยันเอกสาร '${doc.title}' แล้ว"
+    }
+
+    fun rejectTaxDocument(doc: TaxDocumentEntity) = viewModelScope.launch {
+        repo.saveTaxDocument(doc.copy(verificationStatus = DocumentVerificationStatus.REJECTED))
+        _taxFeedback.value = "ระบุไม่ใช้สิทธิสำหรับ '${doc.title}' แล้ว"
+    }
+
+    fun deleteTaxDocument(doc: TaxDocumentEntity) = viewModelScope.launch(Dispatchers.IO) {
+        taxDocVaultManager.deleteLocalFileSafely(doc)
+        repo.deleteTaxDocument(doc)
+        withContext(Dispatchers.Main) {
+            _taxFeedback.value = "ลบเอกสาร '${doc.title}' ออกจากคลังแล้ว"
+        }
+    }
+
+    fun saveOpenApiSettings(settings: OpenApiSettingsEntity) = viewModelScope.launch {
+        repo.saveOpenApiSettings(settings)
+        _taxFeedback.value = "บันทึกการตั้งค่า RD Open API แล้ว"
+    }
+
+    fun attemptOfficialXmlExport(uri: Uri?) = viewModelScope.launch {
+        val yearBe = preferences.value.selectedTaxYearBe
+        val summary = taxWorkspaceSummary.value ?: return@launch
+        val formType = summary.eligibility.recommendedForm
+        if (formType == null) {
+            _taxFeedback.value = "ยังไม่สามารถระบุแบบ ภ.ง.ด. ที่เหมาะสมได้ กรุณาตรวจสอบรายรับก่อน"
+            return@launch
+        }
+        val profile = taxProfile.value ?: TaxProfileEntity(taxYearBe = yearBe)
+        val identity = taxpayerIdentity.value ?: TaxpayerIdentityEntity(taxYearBe = yearBe)
+        val nextVersion = repo.nextFilingVersion(yearBe, formType)
+        val canonical = RdXmlPublicSerializer.buildCanonicalReturn(
+            taxYearBe = yearBe,
+            formType = formType,
+            filingVersion = nextVersion,
+            profile = profile,
+            identity = identity,
+            report = summary.report,
+            confirmedDeductions = taxDeductions.value
+        )
+        val response = localXmlProvider.submit(
+            TaxSubmissionRequest(
+                canonicalReturn = canonical,
+                idempotencyKey = "${yearBe}_${formType.name}_v$nextVersion"
+            )
+        )
+        if (!response.accepted) {
+            _taxFeedback.value = response.messageTh
+            return@launch
+        }
+        if (uri != null) {
+            val written = withContext(Dispatchers.IO) {
+                runCatching {
+                    getApplication<Application>().contentResolver.openOutputStream(uri)?.use { out ->
+                        out.write(response.xmlContent.toByteArray(Charsets.UTF_8))
+                    } ?: error("ไม่สามารถเปิดไฟล์ XML ปลายทางได้")
+                }
+            }
+            if (written.isFailure) {
+                _taxFeedback.value = "บันทึกไฟล์ XML ล้มเหลว: ${written.exceptionOrNull()?.message}"
+                return@launch
+            }
+        }
+        val docIdsJson = kotlinx.serialization.json.Json.encodeToString(
+            taxDocuments.value.map { it.id }
+        )
+        repo.saveFilingHistory(
+            TaxFilingHistoryEntity(
+                taxYearBe = yearBe,
+                formType = formType,
+                filingVersion = nextVersion,
+                xmlFileName = "overseer_${formType.name.lowercase()}_$yearBe.xml",
+                xmlSha256 = response.xmlSha256,
+                totalAssessableSatang = canonical.totalAssessableIncomeSatang,
+                totalDeductionSatang = canonical.expenseDeductionSatang + canonical.personalAndFamilyAllowanceSatang + canonical.userConfirmedDeductionsSatang,
+                netTaxableSatang = canonical.netTaxableIncomeSatang,
+                calculatedTaxSatang = canonical.calculatedTaxSatang,
+                withholdingSatang = canonical.withholdingTaxSatang,
+                payableSatang = canonical.payableTaxSatang,
+                refundSatang = canonical.refundTaxSatang,
+                rulesetVersion = canonical.rulesetVersion,
+                filingState = response.resultingState,
+                submissionRef = response.submissionRef,
+                associatedDocumentIdsJson = docIdsJson
+            )
+        )
+        _taxFeedback.value = response.messageTh
+    }
+
+    fun exportFilingPreparationPdf(uri: Uri) = viewModelScope.launch(Dispatchers.IO) {
+        val yearBe = preferences.value.selectedTaxYearBe
+        val summary = taxWorkspaceSummary.value ?: return@launch
+        val formType = summary.eligibility.recommendedForm ?: TaxFormType.PND90
+        val profile = taxProfile.value ?: TaxProfileEntity(taxYearBe = yearBe)
+        val identity = taxpayerIdentity.value ?: TaxpayerIdentityEntity(taxYearBe = yearBe)
+        val nextVersion = repo.nextFilingVersion(yearBe, formType)
+        val canonical = RdXmlPublicSerializer.buildCanonicalReturn(
+            taxYearBe = yearBe,
+            formType = formType,
+            filingVersion = nextVersion,
+            profile = profile,
+            identity = identity,
+            report = summary.report,
+            confirmedDeductions = taxDeductions.value
+        )
+        val writeRes = runCatching {
+            getApplication<Application>().contentResolver.openOutputStream(uri)?.use { out ->
+                RdXmlPublicSerializer.generatePreparationSummaryPdf(out, canonical)
+            } ?: error("ไม่สามารถเปิดไฟล์ PDF ปลายทางได้")
+        }
+        if (writeRes.isSuccess) {
+            val docIdsJson = kotlinx.serialization.json.Json.encodeToString(
+                taxDocuments.value.map { it.id }
+            )
+            repo.saveFilingHistory(
+                TaxFilingHistoryEntity(
+                    taxYearBe = yearBe,
+                    formType = formType,
+                    filingVersion = nextVersion,
+                    xmlFileName = "summary_${formType.name.lowercase()}_${yearBe}_v$nextVersion.pdf",
+                    totalAssessableSatang = canonical.totalAssessableIncomeSatang,
+                    totalDeductionSatang = canonical.expenseDeductionSatang + canonical.personalAndFamilyAllowanceSatang + canonical.userConfirmedDeductionsSatang,
+                    netTaxableSatang = canonical.netTaxableIncomeSatang,
+                    calculatedTaxSatang = canonical.calculatedTaxSatang,
+                    withholdingSatang = canonical.withholdingTaxSatang,
+                    payableSatang = canonical.payableTaxSatang,
+                    refundSatang = canonical.refundTaxSatang,
+                    rulesetVersion = canonical.rulesetVersion,
+                    filingState = if (summary.readyForManualSummaryPreparation) TaxFilingState.READY else TaxFilingState.DRAFT,
+                    associatedDocumentIdsJson = docIdsJson,
+                    notes = "สร้างเอกสารสรุปเตรียมกรอก e-Filing (ออฟไลน์)"
+                )
+            )
+        }
+        withContext(Dispatchers.Main) {
+            _taxFeedback.value = writeRes.fold(
+                onSuccess = { "บันทึก PDF เตรียมยื่นแบบ v$nextVersion สำเร็จและบันทึกลงประวัติแล้ว" },
+                onFailure = { "ส่งออก PDF ล้มเหลว: ${it.message}" }
+            )
+        }
+    }
+
+    fun updateFilingHistoryState(
+        entry: TaxFilingHistoryEntity,
+        newState: TaxFilingState,
+        submissionRef: String = entry.submissionRef,
+        confirmationRef: String = entry.confirmationRef,
+        notes: String = entry.notes
+    ) = viewModelScope.launch {
+        repo.updateFilingState(entry, newState, submissionRef, confirmationRef, notes)
+        _taxFeedback.value = "อัปเดตสถานะการยื่นแบบเป็น: ${newState.labelTh}"
+    }
+
+    fun clearTaxFeedback() {
+        _taxFeedback.value = null
+    }
 
     // --- Preferences ---
     fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { prefsRepo.setThemeMode(mode) }
@@ -662,9 +1011,11 @@ class OverseerViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun totalVaultStorageBytes(): Long {
-        val dir = scannerPipeline.vaultImagesDir()
-        if (!dir.exists()) return 0L
-        return dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        val imgBytes = scannerPipeline.vaultImagesDir().takeIf { it.exists() }
+            ?.walkTopDown()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
+        val taxDocBytes = taxDocVaultManager.vaultDocsDir().takeIf { it.exists() }
+            ?.walkTopDown()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
+        return imgBytes + taxDocBytes
     }
 
     fun databaseSizeBytes(): Long {
