@@ -5,6 +5,8 @@ on:
     branches:
       - main
       - master
+    tags:
+      - "v*"
   pull_request:
     branches:
       - main
@@ -22,7 +24,7 @@ on:
           - all
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -111,3 +113,46 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish APK to GitHub Releases
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          STAGE_DIR="${RUNNER_TEMP}/release-apks"
+          mkdir -p "$STAGE_DIR"
+
+          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+            cp app/build/outputs/apk/debug/app-debug.apk "${STAGE_DIR}/OverseerFinance-debug.apk"
+          fi
+
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk "${STAGE_DIR}/OverseerFinance-release.apk"
+          fi
+
+          if [ -z "$(ls -A "$STAGE_DIR")" ]; then
+            echo "::error::No APK files found to publish to GitHub Releases."
+            exit 1
+          fi
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            RELEASE_TAG="${GITHUB_REF_NAME}"
+            RELEASE_TITLE="OverseerFinance ${GITHUB_REF_NAME}"
+          else
+            RELEASE_TAG="latest"
+            RELEASE_TITLE="OverseerFinance Latest Build (#${GITHUB_RUN_NUMBER})"
+          fi
+
+          RELEASE_NOTES="Automated APK build from commit ${GITHUB_SHA} (Run #${GITHUB_RUN_NUMBER})."
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TITLE" \
+              --notes "$RELEASE_NOTES"
+            gh release upload "$RELEASE_TAG" "${STAGE_DIR}"/*.apk --clobber
+          else
+            gh release create "$RELEASE_TAG" "${STAGE_DIR}"/*.apk \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_TITLE" \
+              --notes "$RELEASE_NOTES"
+          fi

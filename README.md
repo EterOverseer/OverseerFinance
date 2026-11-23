@@ -52,10 +52,10 @@ gradle :app:testDebugUnitTest
 
 ## GitHub Actions APK Build
 
-The repository includes `.github/workflows/build-apk.yml`, which runs on pushes/PRs to `main` / `master` and manual `workflow_dispatch`:
+The repository includes `.github/workflows/build-apk.yml`, which runs on pushes/PRs to `main` / `master`, version tags (`v*`), and manual `workflow_dispatch`:
 
 - Sets up Temurin JDK 21 and Gradle 9.3.1, restores `debug.keystore` from `debug.keystore.base64`, runs `:app:testDebugUnitTest`, and builds `:app:assembleDebug` + `:rd-connector:assembleDebug`.
-- Uploads `OverseerFinance-debug-apk` as a downloadable GitHub Actions artifact.
+- Uploads the APK to both **Actions → Artifacts** (`OverseerFinance-debug-apk`) and **GitHub Releases** (`OverseerFinance-debug.apk` under the `latest` release or the `v*` tag).
 - To build a signed Release APK via **Actions → Build Android APK → Run workflow (`release` or `all`)**, configure these GitHub Repository Secrets (with key alias `upload`):
   - `RELEASE_KEYSTORE_BASE64`: Base64-encoded `.jks` keystore
   - `STORE_PASSWORD`: Keystore password
