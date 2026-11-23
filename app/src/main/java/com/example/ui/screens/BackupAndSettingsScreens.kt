@@ -1,31 +1,40 @@
 package com.example.ui.screens
 
 import android.Manifest
+import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.DocumentScanner
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.OpenInBrowser
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Storage
+import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
@@ -59,6 +68,9 @@ import com.example.data.local.OcrModelStatus
 import com.example.data.local.ScanSourceEntity
 import com.example.data.local.ThemeMode
 import com.example.data.preferences.UserPreferences
+import com.example.domain.OcrModelDiagnostics
+import com.example.domain.OcrModelSlot
+import com.example.domain.PaddleOcrEngine
 import com.example.domain.ThaiDateFormatter
 import com.example.notifications.ReminderScheduler
 import com.example.ui.components.OverseerCard
@@ -424,6 +436,7 @@ fun BackupCenterScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsDiagnosticsScreen(
     prefs: UserPreferences,
@@ -433,6 +446,8 @@ fun SettingsDiagnosticsScreen(
     vaultBytes: Long,
     dbBytes: Long,
     ocrStatus: OcrModelStatus,
+    ocrDiagnostics: OcrModelDiagnostics,
+    pendingOcrCount: Int,
     lastBackupTimeMillis: Long?,
     onBack: () -> Unit,
     onSetTheme: (ThemeMode) -> Unit,
@@ -440,6 +455,9 @@ fun SettingsDiagnosticsScreen(
     onSetLanguage: (String) -> Unit,
     onSetAutoScan: (Boolean, Int) -> Unit,
     onSetNotifications: (Boolean) -> Unit,
+    onInstallOcrModels: (List<Uri>, OcrModelSlot?) -> Unit,
+    onResetOcrModels: () -> Unit,
+    onReprocessPendingOcr: () -> Unit,
     onOpenBackupCenter: () -> Unit
 ) {
     val context = LocalContext.current
@@ -449,113 +467,333 @@ fun SettingsDiagnosticsScreen(
         onSetNotifications(granted)
     }
 
-    LazyColumn(
+    var pendingSlot by remember { mutableStateOf<OcrModelSlot?>(null) }
+    val multiModelLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            onInstallOcrModels(uris, null)
+        }
+    }
+    val singleSlotModelLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        val slot = pendingSlot
+        pendingSlot = null
+        if (uri != null) {
+            onInstallOcrModels(listOf(uri), slot)
+        }
+    }
+
+    Box(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(SpacingTokens.lg),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        contentAlignment = Alignment.TopCenter
     ) {
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onBack) { Text("← กลับ") }
-                Text("ตั้งค่าและวินิจฉัยระบบ", style = MaterialTheme.typography.titleLarge)
-            }
-        }
-
-        item {
-            OverseerCard {
-                Text("การแสดงผลและภาษา", style = MaterialTheme.typography.titleSmall)
-                Spacer(Modifier.height(6.dp))
-                Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ThemeMode.entries.forEach { mode ->
-                        FilterChip(selected = prefs.themeMode == mode, onClick = { onSetTheme(mode) }, label = { Text(mode.labelTh) })
-                    }
-                }
-                Spacer(Modifier.height(6.dp))
-                Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    DateDisplayFormat.entries.forEach { fmt ->
-                        FilterChip(selected = prefs.dateFormat == fmt, onClick = { onSetDateFormat(fmt) }, label = { Text(fmt.labelTh) })
-                    }
-                }
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterChip(selected = prefs.primaryLanguage == "th", onClick = { onSetLanguage("th") }, label = { Text("ภาษาไทย (หลัก)") })
-                    FilterChip(selected = prefs.primaryLanguage == "en", onClick = { onSetLanguage("en") }, label = { Text("English (Secondary)") })
-                }
-            }
-        }
-
-        item {
-            OverseerCard {
-                Text("สแกน K PLUS อัตโนมัติ & การแจ้งเตือนออฟไลน์", style = MaterialTheme.typography.titleSmall)
+        LazyColumn(
+            modifier = Modifier
+                .widthIn(max = 1040.dp)
+                .fillMaxSize(),
+            contentPadding = PaddingValues(SpacingTokens.lg),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("เปิดสแกนเบื้องหลังด้วย WorkManager", style = MaterialTheme.typography.bodyMedium)
-                    Switch(
-                        checked = prefs.autoScanEnabled,
-                        onCheckedChange = { onSetAutoScan(it, prefs.scanIntervalMinutes) }
+                    TextButton(onClick = onBack) { Text("← กลับ", maxLines = 1) }
+                    Text(
+                        "ตั้งค่าและวินิจฉัยระบบ",
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.weight(1f)
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(15, 30, 60).forEach { mins ->
-                        FilterChip(
-                            selected = prefs.scanIntervalMinutes == mins,
-                            onClick = { onSetAutoScan(prefs.autoScanEnabled, mins) },
-                            label = { Text("ทุก $mins นาที") }
+            }
+
+            // Install / Update Offline OCR Model Card
+            item {
+                OverseerCard(modifier = Modifier.testTag("ocr_model_settings_card")) {
+                    SectionHeaderRow(
+                        title = "ติดตั้ง / อัปเดตโมเดล OCR (PP-OCRv5)",
+                        subtitle = "ประมวลผลออฟไลน์ในเครื่อง 100% ผ่าน ONNX Runtime",
+                        trailing = {
+                            StatusBadge(
+                                text = if (ocrDiagnostics.status == OcrModelStatus.READY) "พร้อมใช้งาน" else "รอติดตั้งไฟล์",
+                                color = if (ocrDiagnostics.status == OcrModelStatus.READY) IncomeEmerald else WarningAmber
+                            )
+                        }
+                    )
+                    Spacer(Modifier.height(10.dp))
+
+                    OcrSlotStatusRow(
+                        fileName = PaddleOcrEngine.DET_MODEL_FILE,
+                        label = OcrModelSlot.DETECTION.labelTh,
+                        installed = ocrDiagnostics.hasDetectionModel,
+                        source = ocrDiagnostics.detectionSource,
+                        sizeBytes = ocrDiagnostics.detectionSizeBytes
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    OcrSlotStatusRow(
+                        fileName = PaddleOcrEngine.REC_MODEL_FILE,
+                        label = OcrModelSlot.RECOGNITION.labelTh,
+                        installed = ocrDiagnostics.hasRecognitionModel,
+                        source = ocrDiagnostics.recognitionSource,
+                        sizeBytes = ocrDiagnostics.recognitionSizeBytes
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    OcrSlotStatusRow(
+                        fileName = PaddleOcrEngine.DICT_FILE,
+                        label = OcrModelSlot.DICTIONARY.labelTh,
+                        installed = ocrDiagnostics.hasDictionary,
+                        source = ocrDiagnostics.dictionarySource,
+                        sizeBytes = ocrDiagnostics.dictionarySizeBytes
+                    )
+
+                    ocrDiagnostics.lastUpdatedEpochMillis?.let { ts ->
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "อัปเดตโมเดลล่าสุด: ${ThaiDateFormatter.formatDateTime(ts, prefs.dateFormat)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = { multiModelLauncher.launch(arrayOf("*/*")) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("install_update_ocr_model_button")
+                    ) {
+                        Icon(Icons.Rounded.UploadFile, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (ocrDiagnostics.status == OcrModelStatus.READY) {
+                                "อัปเดตโมเดล OCR (.onnx / th_dict.txt)"
+                            } else {
+                                "ติดตั้งโมเดล OCR จากไฟล์ในเครื่อง (.onnx)"
+                            },
+                            maxLines = 1
+                        )
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                pendingSlot = OcrModelSlot.DETECTION
+                                singleSlotModelLauncher.launch(arrayOf("*/*"))
+                            }
+                        ) {
+                            Icon(Icons.Rounded.DocumentScanner, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("เลือก Det (.onnx)", maxLines = 1)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                pendingSlot = OcrModelSlot.RECOGNITION
+                                singleSlotModelLauncher.launch(arrayOf("*/*"))
+                            }
+                        ) {
+                            Icon(Icons.Rounded.DocumentScanner, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("เลือก Rec (.onnx)", maxLines = 1)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(PaddleOcrEngine.OFFICIAL_MODEL_GUIDE_URL))
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Rounded.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("เปิดหน้าดาวน์โหลดโมเดล", maxLines = 1)
+                        }
+                    }
+
+                    if (ocrDiagnostics.status == OcrModelStatus.READY && pendingOcrCount > 0) {
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onReprocessPendingOcr,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Rounded.Refresh, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("สแกน OCR ซ้ำกับสลิปรอตรวจ ($pendingOcrCount รายการ)", maxLines = 1)
+                        }
+                    }
+
+                    if (ocrDiagnostics.hasUserInstalledFiles) {
+                        Spacer(Modifier.height(4.dp))
+                        TextButton(onClick = onResetOcrModels) {
+                            Text("ล้างไฟล์โมเดลที่ติดตั้งเอง", color = ExpenseCoral)
+                        }
+                    }
+                }
+            }
+
+            item {
+                OverseerCard {
+                    Text("การแสดงผลและภาษา", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(8.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        ThemeMode.entries.forEach { mode ->
+                            FilterChip(selected = prefs.themeMode == mode, onClick = { onSetTheme(mode) }, label = { Text(mode.labelTh) })
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        DateDisplayFormat.entries.forEach { fmt ->
+                            FilterChip(selected = prefs.dateFormat == fmt, onClick = { onSetDateFormat(fmt) }, label = { Text(fmt.labelTh) })
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        FilterChip(selected = prefs.primaryLanguage == "th", onClick = { onSetLanguage("th") }, label = { Text("ภาษาไทย (หลัก)") })
+                        FilterChip(selected = prefs.primaryLanguage == "en", onClick = { onSetLanguage("en") }, label = { Text("English (Secondary)") })
+                    }
+                }
+            }
+
+            item {
+                OverseerCard {
+                    Text("สแกน K PLUS อัตโนมัติ & การแจ้งเตือนออฟไลน์", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "เปิดสแกนเบื้องหลังด้วย WorkManager",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(end = 12.dp)
+                        )
+                        Switch(
+                            checked = prefs.autoScanEnabled,
+                            onCheckedChange = { onSetAutoScan(it, prefs.scanIntervalMinutes) }
+                        )
+                    }
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        listOf(15, 30, 60).forEach { mins ->
+                            FilterChip(
+                                selected = prefs.scanIntervalMinutes == mins,
+                                onClick = { onSetAutoScan(prefs.autoScanEnabled, mins) },
+                                label = { Text("ทุก $mins นาที") }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "แจ้งเตือนบิลประจำและหนี้สิน",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(end = 12.dp)
+                        )
+                        Switch(
+                            checked = prefs.notificationsEnabled,
+                            onCheckedChange = { enable ->
+                                if (enable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                    !ReminderScheduler.hasNotificationPermission(context)
+                                ) {
+                                    notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                } else {
+                                    onSetNotifications(enable)
+                                }
+                            }
                         )
                     }
                 }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("แจ้งเตือนบิลประจำและหนี้สิน", style = MaterialTheme.typography.bodyMedium)
-                    Switch(
-                        checked = prefs.notificationsEnabled,
-                        onCheckedChange = { enable ->
-                            if (enable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                                !ReminderScheduler.hasNotificationPermission(context)
-                            ) {
-                                notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                            } else {
-                                onSetNotifications(enable)
-                            }
-                        }
-                    )
-                }
             }
-        }
 
-        item {
-            OverseerCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.Security, contentDescription = null, tint = IncomeEmerald)
-                    Spacer(Modifier.width(8.dp))
-                    Text("วินิจฉัยระบบภายใน & ความเป็นส่วนตัว", style = MaterialTheme.typography.titleSmall)
-                }
-                Spacer(Modifier.height(8.dp))
-                Text("• เวอร์ชันแอป: 1.0.0 (Database Schema v${DatabaseMigrations.CURRENT_SCHEMA_VERSION})", style = MaterialTheme.typography.bodySmall)
-                Text("• สถานะเครือข่าย: ออฟไลน์ 100% (ไม่มีสิทธิ์ INTERNET ใน Manifest)", style = MaterialTheme.typography.bodySmall, color = IncomeEmerald)
-                Text("• เอนจิน OCR: ${ocrStatus.labelTh}", style = MaterialTheme.typography.bodySmall)
-                Text("• จำนวนธุรกรรมทั้งหมด: $transactionCount รายการ", style = MaterialTheme.typography.bodySmall)
-                Text("• ภาพหลักฐานในคลังส่วนตัว: $storedImagesCount ไฟล์ (${vaultBytes / 1024} KB)", style = MaterialTheme.typography.bodySmall)
-                Text("• ขนาดฐานข้อมูล SQLite: ${dbBytes / 1024} KB", style = MaterialTheme.typography.bodySmall)
-                Text(
-                    "• สแกนสำเร็จล่าสุด: ${scanSource?.lastSuccessEpochMillis?.let { ThaiDateFormatter.formatDateTime(it, prefs.dateFormat) } ?: "ยังไม่เคยสแกน"}",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Text(
-                    "• สำรองข้อมูลล่าสุด: ${lastBackupTimeMillis?.let { ThaiDateFormatter.formatDateTime(it, prefs.dateFormat) } ?: "ยังไม่เคยสำรองข้อมูล"}",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = onOpenBackupCenter, modifier = Modifier.fillMaxWidth()) {
-                    Text("ไปที่ศูนย์สำรองและกู้คืนข้อมูล")
+            item {
+                OverseerCard {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Security, contentDescription = null, tint = IncomeEmerald)
+                        Spacer(Modifier.width(8.dp))
+                        Text("วินิจฉัยระบบภายใน & ความเป็นส่วนตัว", style = MaterialTheme.typography.titleSmall)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("• เวอร์ชันแอป: 1.0.0 (Database Schema v${DatabaseMigrations.CURRENT_SCHEMA_VERSION})", style = MaterialTheme.typography.bodySmall)
+                    Text("• สถานะเครือข่าย: ออฟไลน์ 100% (ไม่มีสิทธิ์ INTERNET ใน Manifest)", style = MaterialTheme.typography.bodySmall, color = IncomeEmerald)
+                    Text("• เอนจิน OCR: ${ocrStatus.labelTh}", style = MaterialTheme.typography.bodySmall)
+                    Text("• จำนวนธุรกรรมทั้งหมด: $transactionCount รายการ", style = MaterialTheme.typography.bodySmall)
+                    Text("• ภาพหลักฐานในคลังส่วนตัว: $storedImagesCount ไฟล์ (${vaultBytes / 1024} KB)", style = MaterialTheme.typography.bodySmall)
+                    Text("• ขนาดฐานข้อมูล SQLite: ${dbBytes / 1024} KB", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "• สแกนสำเร็จล่าสุด: ${scanSource?.lastSuccessEpochMillis?.let { ThaiDateFormatter.formatDateTime(it, prefs.dateFormat) } ?: "ยังไม่เคยสแกน"}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        "• สำรองข้อมูลล่าสุด: ${lastBackupTimeMillis?.let { ThaiDateFormatter.formatDateTime(it, prefs.dateFormat) } ?: "ยังไม่เคยสำรองข้อมูล"}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(onClick = onOpenBackupCenter, modifier = Modifier.fillMaxWidth()) {
+                        Text("ไปที่ศูนย์สำรองและกู้คืนข้อมูล")
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun OcrSlotStatusRow(
+    fileName: String,
+    label: String,
+    installed: Boolean,
+    source: String,
+    sizeBytes: Long
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 8.dp)
+        ) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "$fileName • $source${if (sizeBytes > 0L) " (${sizeBytes / 1024} KB)" else ""}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        StatusBadge(
+            text = if (installed) "ติดตั้งแล้ว" else "ขาดไฟล์",
+            color = if (installed) IncomeEmerald else WarningAmber
+        )
     }
 }

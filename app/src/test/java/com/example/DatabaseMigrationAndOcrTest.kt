@@ -46,6 +46,47 @@ class DatabaseMigrationAndOcrTest {
     }
 
     @Test
+    fun `paddle ocr engine installs updates and resets local onnx models with diagnostics`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val engine = PaddleOcrEngine(context)
+        engine.resetInstalledModels()
+        assertEquals(OcrModelStatus.MISSING_MODEL_ASSETS, engine.inspectModelAvailability())
+
+        // 1) Undersized or explicitly invalid ONNX files must be rejected cleanly
+        val smallBytes = ByteArray(128) { 1 }
+        val rejectedSmall = engine.installOrUpdateModelFiles(
+            listOf("PP-OCRv5_mobile_det.onnx" to smallBytes.inputStream())
+        )
+        assertEquals(0, rejectedSmall.installedCount)
+        assertEquals(OcrModelStatus.MISSING_MODEL_ASSETS, rejectedSmall.diagnostics.status)
+
+        val validSizeBytes = ByteArray(2048) { (it % 127).toByte() }
+        val rejectedInvalidOnnx = engine.installOrUpdateModelFiles(
+            entries = listOf("PP-OCRv5_mobile_det.onnx" to validSizeBytes.inputStream()),
+            validateOnnx = { throw IllegalArgumentException("Invalid ONNX protobuf") }
+        )
+        assertEquals(0, rejectedInvalidOnnx.installedCount)
+        assertEquals(OcrModelStatus.MISSING_MODEL_ASSETS, rejectedInvalidOnnx.diagnostics.status)
+
+        // 2) Installing Det + Rec model files transitions status to READY and reset cleans them
+        val res = engine.installOrUpdateModelFiles(
+            entries = listOf(
+                "PP-OCRv5_mobile_det.onnx" to validSizeBytes.inputStream(),
+                "th_PP-OCRv5_mobile_rec.onnx" to validSizeBytes.inputStream()
+            )
+        )
+        assertEquals(2, res.installedCount)
+        assertEquals(OcrModelStatus.READY, res.diagnostics.status)
+        assertTrue(res.diagnostics.hasUserInstalledFiles)
+        assertTrue(res.diagnostics.hasDetectionModel)
+        assertTrue(res.diagnostics.hasRecognitionModel)
+        assertTrue(res.diagnostics.hasDictionary)
+
+        val resetDiag = engine.resetInstalledModels()
+        assertEquals(OcrModelStatus.MISSING_MODEL_ASSETS, resetDiag.status)
+    }
+
+    @Test
     fun `slip parser supports gregorian CE slash dates and PromptPay slips`() {
         val lines = listOf(
             OcrTextLine("PromptPay", 0.96f),

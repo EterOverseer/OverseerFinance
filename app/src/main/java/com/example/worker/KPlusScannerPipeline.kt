@@ -475,6 +475,68 @@ class KPlusScannerPipeline(private val context: Context) {
             }
         }
 
+    /**
+     * Re-runs local PaddleOCR inference on NEEDS_REVIEW slip drafts whose original private image exists.
+     * Preserves any manual edits the user already filled while updating blank OCR fields.
+     */
+    suspend fun reprocessPendingOcrSlips(): Int = withContext(Dispatchers.IO) {
+        if (ocrEngine.inspectModelAvailability() != com.example.data.local.OcrModelStatus.READY) {
+            return@withContext 0
+        }
+        val db = AppDatabase.getInstance(context)
+        val pendingTxs = db.transactionDao().getAllOnce().filter { it.reviewStatus == ReviewStatus.NEEDS_REVIEW }
+        if (pendingTxs.isEmpty()) return@withContext 0
+
+        val images = db.importedImageDao().getAllOnce().associateBy { it.id }
+        var updatedCount = 0
+
+        for (tx in pendingTxs) {
+            val att = db.attachmentDao().getForTransactionOnce(tx.id).firstOrNull() ?: continue
+            val img = att.importedImageId?.let { images[it] } ?: continue
+            val localFile = File(att.localFilePath.ifBlank { img.privateFilePath })
+            if (!localFile.exists()) continue
+
+            val ocrOutcome = ocrEngine.recognizeSlip(localFile)
+            val parsed = ocrOutcome.parsedSlip
+            val ocrEntity = OcrResultEntity(
+                importedImageId = img.id,
+                rawText = ocrOutcome.rawText,
+                engineName = ocrOutcome.engineName,
+                modelVersion = ocrOutcome.modelVersion,
+                modelStatus = ocrOutcome.modelStatus,
+                detectedBank = parsed.detectedBank,
+                parsedAmountSatang = parsed.amountSatang,
+                amountConfidence = parsed.amountConfidence,
+                parsedDateEpochMillis = parsed.dateEpochMillis,
+                dateConfidence = parsed.dateConfidence,
+                parsedTimeText = parsed.timeText,
+                timeConfidence = parsed.timeConfidence,
+                parsedSender = parsed.senderName,
+                senderConfidence = parsed.senderConfidence,
+                parsedRecipient = parsed.recipientName,
+                recipientConfidence = parsed.recipientConfidence,
+                parsedReference = parsed.paymentReference,
+                referenceConfidence = parsed.referenceConfidence,
+                parsedAccountHint = parsed.accountHint,
+                overallConfidence = parsed.overallConfidence,
+                needsReview = true
+            )
+            db.ocrResultDao().upsert(ocrEntity)
+
+            val updatedTx = tx.copy(
+                amountSatang = if (tx.amountSatang <= 0L && (parsed.amountSatang ?: 0L) > 0L) parsed.amountSatang!! else tx.amountSatang,
+                senderName = tx.senderName.ifBlank { parsed.senderName },
+                recipientName = tx.recipientName.ifBlank { parsed.recipientName },
+                paymentReference = tx.paymentReference.ifBlank { parsed.paymentReference },
+                notes = ocrOutcome.diagnosticMessage,
+                updatedAtEpochMillis = System.currentTimeMillis()
+            )
+            db.transactionDao().upsert(updatedTx)
+            updatedCount++
+        }
+        updatedCount
+    }
+
     private fun collectImagesRecursively(dir: DocumentFile): List<DocumentFile> {
         val result = mutableListOf<DocumentFile>()
         val children = runCatching { dir.listFiles() }.getOrDefault(emptyArray())

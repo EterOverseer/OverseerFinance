@@ -5,7 +5,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -87,6 +91,7 @@ import com.example.ui.theme.TransferCyan
 import com.example.ui.theme.WarningAmber
 import java.io.File
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ScanCenterScreen(
     scanSource: ScanSourceEntity?,
@@ -105,7 +110,9 @@ fun ScanCenterScreen(
     onPickSingleSlip: (Uri) -> Unit,
     onConfirmReviewTx: (TransactionEntity) -> Unit,
     onDeleteReviewTx: (TransactionEntity) -> Unit,
-    onOpenStorageCleaner: () -> Unit
+    onOpenStorageCleaner: () -> Unit,
+    onOpenOcrSettings: () -> Unit = {},
+    onReprocessPendingOcr: () -> Unit = {}
 ) {
     val folderLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -151,11 +158,17 @@ fun ScanCenterScreen(
     val similarCount = importedImages.count { it.importState == ImageImportState.SIMILAR_IMAGE }
     val failedCount = importedImages.count { it.importState == ImageImportState.FAILED }
 
-    LazyColumn(
+    Box(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(SpacingTokens.lg),
-        verticalArrangement = Arrangement.spacedBy(SpacingTokens.md)
+        contentAlignment = Alignment.TopCenter
     ) {
+        LazyColumn(
+            modifier = Modifier
+                .widthIn(max = 1040.dp)
+                .fillMaxSize(),
+            contentPadding = PaddingValues(SpacingTokens.lg),
+            verticalArrangement = Arrangement.spacedBy(SpacingTokens.md)
+        ) {
         item {
             Text("ศูนย์สแกนสลิป K PLUS & OCR", style = MaterialTheme.typography.headlineSmall)
             Text(
@@ -208,23 +221,23 @@ fun ScanCenterScreen(
                 }
 
                 Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Button(
                         onClick = { folderLauncher.launch(null) },
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("select_kplus_folder_button")
+                        modifier = Modifier.testTag("select_kplus_folder_button")
                     ) {
                         Icon(Icons.Rounded.FolderOpen, contentDescription = null)
                         Spacer(Modifier.width(6.dp))
-                        Text(if (scanSource == null) "เลือกโฟลเดอร์" else "เปลี่ยนโฟลเดอร์")
+                        Text(if (scanSource == null) "เลือกโฟลเดอร์ K PLUS" else "เปลี่ยนโฟลเดอร์", maxLines = 1, softWrap = false)
                     }
                     OutlinedButton(
                         onClick = onScanNow,
                         enabled = !isScanning && scanSource != null,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("scan_now_button")
+                        modifier = Modifier.testTag("scan_now_button")
                     ) {
                         if (isScanning) {
                             CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
@@ -232,7 +245,7 @@ fun ScanCenterScreen(
                             Icon(Icons.Rounded.Refresh, contentDescription = null)
                         }
                         Spacer(Modifier.width(6.dp))
-                        Text("สแกนทันที")
+                        Text("สแกนทันที", maxLines = 1, softWrap = false)
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -244,7 +257,7 @@ fun ScanCenterScreen(
                 ) {
                     Icon(Icons.Rounded.PhotoLibrary, contentDescription = null)
                     Spacer(Modifier.width(6.dp))
-                    Text("นำเข้าภาพสลิปเดี่ยวจากแกลเลอรี")
+                    Text("นำเข้าภาพสลิปเดี่ยวจากแกลเลอรี", maxLines = 1)
                 }
 
                 if (!scanFeedback.isNullOrBlank()) {
@@ -258,7 +271,7 @@ fun ScanCenterScreen(
             }
         }
 
-        // Offline OCR Engine Status Card (honest reporting)
+        // Offline OCR Engine Status Card (honest reporting + direct settings link)
         item {
             OverseerCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -280,10 +293,37 @@ fun ScanCenterScreen(
                 if (ocrModelStatus == OcrModelStatus.MISSING_MODEL_ASSETS) {
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "หมายเหตุ: พบคลังคำศัพท์ th_dict.txt และท่อ ONNX Runtime แล้ว แต่ยังไม่มีไฟล์โมเดล PP-OCRv5_mobile_det.onnx และ th_PP-OCRv5_mobile_rec.onnx ใน assets/ocr/ แอปจะไม่สร้างผล OCR ปลอม และจะเปิดให้คุณตรวจสอบเทียบภาพสลิปจริงได้ทันที",
+                        "หมายเหตุ: พบคลังคำศัพท์ th_dict.txt แล้ว แต่ยังไม่ได้ติดตั้งไฟล์โมเดล .onnx คุณสามารถติดตั้ง/อัปเดตไฟล์โมเดลได้ในหน้าตั้งค่า หรือตรวจสอบสลิปเทียบภาพจริงได้ทันที",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+                Spacer(Modifier.height(10.dp))
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onOpenOcrSettings,
+                        modifier = Modifier.testTag("scan_open_ocr_settings_button")
+                    ) {
+                        Text(
+                            if (ocrModelStatus == OcrModelStatus.READY) "จัดการ / อัปเดตโมเดล OCR" else "ติดตั้งโมเดล OCR (ตั้งค่า)",
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                    if (ocrModelStatus == OcrModelStatus.READY && pendingTransactions.isNotEmpty()) {
+                        OutlinedButton(
+                            onClick = onReprocessPendingOcr,
+                            enabled = !isScanning
+                        ) {
+                            Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("อ่าน OCR ซ้ำ (${pendingTransactions.size})", maxLines = 1, softWrap = false)
+                        }
+                    }
                 }
             }
         }
@@ -354,6 +394,7 @@ fun ScanCenterScreen(
                     }
                 }
             }
+        }
         }
     }
 }
@@ -575,6 +616,7 @@ fun SlipReviewScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun StorageCleanerScreen(
     importedImages: List<ImportedImageEntity>,
@@ -698,15 +740,18 @@ fun StorageCleanerScreen(
                                 )
                             }
                             StatusBadge(img.importState.labelTh, IncomeEmerald)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
                                 TextButton(onClick = { previewPair = img to false }) {
-                                    Text("ดูสำเนาในแอป")
+                                    Text("ดูสำเนาในแอป", maxLines = 1)
                                 }
                                 TextButton(onClick = { previewPair = img to true }) {
-                                    Text("ดูต้นฉบับ K PLUS")
+                                    Text("ดูต้นฉบับ K PLUS", maxLines = 1)
                                 }
                                 TextButton(onClick = { selectedMap[img.id] = false }) {
-                                    Text("เก็บต้นฉบับไว้")
+                                    Text("เก็บต้นฉบับไว้", maxLines = 1)
                                 }
                             }
                         }

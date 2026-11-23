@@ -12,12 +12,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -156,6 +158,7 @@ fun TransactionsScreen(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         floatingActionButton = {
             FloatingActionButton(
                 onClick = {
@@ -168,26 +171,36 @@ fun TransactionsScreen(
             }
         }
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = SpacingTokens.lg)
+                .padding(innerPadding),
+            contentAlignment = Alignment.TopCenter
         ) {
-            Spacer(Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 1040.dp)
+                    .fillMaxSize()
+                    .padding(horizontal = SpacingTokens.lg)
             ) {
-                Column {
-                    Text("รายการธุรกรรม", style = MaterialTheme.typography.headlineSmall)
-                    Text(
-                        "พบ ${filtered.size} รายการจากทั้งหมด ${transactions.size}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                Spacer(Modifier.height(SpacingTokens.lg))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 8.dp)
+                    ) {
+                        Text("รายการธุรกรรม", style = MaterialTheme.typography.headlineSmall)
+                        Text(
+                            "พบ ${filtered.size} รายการจากทั้งหมด ${transactions.size}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 Row {
                     IconButton(onClick = { showAdvancedFilters = !showAdvancedFilters }) {
                         Icon(Icons.Rounded.FilterList, contentDescription = "ตัวกรองขั้นสูง")
@@ -376,6 +389,7 @@ fun TransactionsScreen(
                         }
                     }
                 }
+            }
             }
         }
     }

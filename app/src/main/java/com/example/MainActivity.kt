@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Calculate
 import androidx.compose.material.icons.rounded.DocumentScanner
@@ -37,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -126,6 +128,7 @@ fun OverseerAppRoot(viewModel: OverseerViewModel = viewModel()) {
     val taxFeedback by viewModel.taxFeedback.collectAsStateWithLifecycle()
     val backupUiState by viewModel.backupUiState.collectAsStateWithLifecycle()
     val backupHistory by viewModel.backupHistory.collectAsStateWithLifecycle()
+    val ocrDiagnostics by viewModel.ocrDiagnostics.collectAsStateWithLifecycle()
 
     // Trigger K PLUS folder scan when returning to foreground if auto-scan enabled
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -181,7 +184,7 @@ fun OverseerAppRoot(viewModel: OverseerViewModel = viewModel()) {
 
             Scaffold(
                 snackbarHost = { SnackbarHost(snackbarHostState) },
-                contentWindowInsets = WindowInsets(0, 0, 0, 0),
+                contentWindowInsets = WindowInsets.safeDrawing,
                 bottomBar = {
                     if (!useRail) {
                         NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
@@ -191,7 +194,14 @@ fun OverseerAppRoot(viewModel: OverseerViewModel = viewModel()) {
                                     selected = selected,
                                     onClick = { navigateToTab(tab.route) },
                                     icon = { Icon(tab.icon, contentDescription = tab.label) },
-                                    label = { Text(tab.label, maxLines = 1) },
+                                    label = {
+                                        Text(
+                                            tab.label,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
                                     modifier = Modifier.testTag(tab.testTag)
                                 )
                             }
@@ -205,14 +215,17 @@ fun OverseerAppRoot(viewModel: OverseerViewModel = viewModel()) {
                         .padding(innerPadding)
                 ) {
                     if (useRail) {
-                        NavigationRail(containerColor = MaterialTheme.colorScheme.surface) {
+                        NavigationRail(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            windowInsets = WindowInsets(0, 0, 0, 0)
+                        ) {
                             tabs.forEach { tab ->
                                 val selected = currentDestination?.hasRoute(tab.route::class) == true
                                 NavigationRailItem(
                                     selected = selected,
                                     onClick = { navigateToTab(tab.route) },
                                     icon = { Icon(tab.icon, contentDescription = tab.label) },
-                                    label = { Text(tab.label) },
+                                    label = { Text(tab.label, maxLines = 1, softWrap = false) },
                                     modifier = Modifier.testTag(tab.testTag)
                                 )
                             }
@@ -282,7 +295,7 @@ fun OverseerAppRoot(viewModel: OverseerViewModel = viewModel()) {
                                     scanSource = scanSource,
                                     isScanning = isScanning,
                                     scanFeedback = scanFeedback,
-                                    ocrModelStatus = viewModel.ocrModelStatus,
+                                    ocrModelStatus = ocrDiagnostics.status,
                                     pendingTransactions = pendingReview,
                                     importedImages = importedImages,
                                     ocrResults = ocrResults,
@@ -295,7 +308,12 @@ fun OverseerAppRoot(viewModel: OverseerViewModel = viewModel()) {
                                     onPickSingleSlip = viewModel::importSinglePickedSlip,
                                     onConfirmReviewTx = { tx -> viewModel.saveTransaction(tx, null) },
                                     onDeleteReviewTx = viewModel::deleteTransaction,
-                                    onOpenStorageCleaner = { showStorageCleaner = true }
+                                    onOpenStorageCleaner = { showStorageCleaner = true },
+                                    onOpenOcrSettings = {
+                                        moreSubScreen = MoreSubScreen.SETTINGS_DIAGNOSTICS
+                                        navigateToTab(MoreRoute)
+                                    },
+                                    onReprocessPendingOcr = viewModel::reprocessPendingOcrSlips
                                 )
                             }
                         }
@@ -448,7 +466,9 @@ fun OverseerAppRoot(viewModel: OverseerViewModel = viewModel()) {
                                         storedImagesCount = importedImages.count { it.privateFilePath.isNotBlank() },
                                         vaultBytes = viewModel.totalVaultStorageBytes(),
                                         dbBytes = viewModel.databaseSizeBytes(),
-                                        ocrStatus = viewModel.ocrModelStatus,
+                                        ocrStatus = ocrDiagnostics.status,
+                                        ocrDiagnostics = ocrDiagnostics,
+                                        pendingOcrCount = pendingReview.size,
                                         lastBackupTimeMillis = backupHistory.firstOrNull()?.createdAtEpochMillis,
                                         onBack = { moreSubScreen = MoreSubScreen.MENU },
                                         onSetTheme = viewModel::setThemeMode,
@@ -456,6 +476,9 @@ fun OverseerAppRoot(viewModel: OverseerViewModel = viewModel()) {
                                         onSetLanguage = viewModel::setLanguage,
                                         onSetAutoScan = viewModel::setAutoScanConfig,
                                         onSetNotifications = viewModel::setNotificationsEnabled,
+                                        onInstallOcrModels = viewModel::installOcrModelUris,
+                                        onResetOcrModels = viewModel::resetInstalledOcrModels,
+                                        onReprocessPendingOcr = viewModel::reprocessPendingOcrSlips,
                                         onOpenBackupCenter = { moreSubScreen = MoreSubScreen.BACKUP_CENTER }
                                     )
                                 }

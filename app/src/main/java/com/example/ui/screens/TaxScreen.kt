@@ -7,6 +7,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
@@ -144,11 +147,17 @@ fun TaxScreen(
         contract = ActivityResultContracts.CreateDocument("application/pdf")
     ) { uri -> if (uri != null) onExportTaxPdf(uri) }
 
-    LazyColumn(
+    Box(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(SpacingTokens.lg),
-        verticalArrangement = Arrangement.spacedBy(SpacingTokens.md)
+        contentAlignment = Alignment.TopCenter
     ) {
+        LazyColumn(
+            modifier = Modifier
+                .widthIn(max = 1040.dp)
+                .fillMaxSize(),
+            contentPadding = PaddingValues(SpacingTokens.lg),
+            verticalArrangement = Arrangement.spacedBy(SpacingTokens.md)
+        ) {
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -344,6 +353,7 @@ fun TaxScreen(
                 }
             }
         }
+        }
     }
 
     if (showAddDeduction) {
@@ -457,10 +467,14 @@ private fun TaxOverviewSection(
                 Text("• ควรเพิ่มเอกสารหลักฐานอีก ${summary.missingDocuments.size} รายการ", style = MaterialTheme.typography.bodySmall, color = WarningAmber)
             }
             Spacer(Modifier.height(8.dp))
-            Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { onJumpTab(TaxCenterTab.RECONCILIATION) }) { Text("ตรวจรายรับ CSV/สลิป") }
-                OutlinedButton(onClick = { onJumpTab(TaxCenterTab.VAULT) }) { Text("คลังเอกสาร (${summary.missingDocuments.size})") }
-                Button(onClick = { onJumpTab(TaxCenterTab.XML_HANDOFF) }) { Text("เตรียม XML / e-Filing") }
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(onClick = { onJumpTab(TaxCenterTab.RECONCILIATION) }) { Text("ตรวจรายรับ CSV/สลิป", maxLines = 1) }
+                OutlinedButton(onClick = { onJumpTab(TaxCenterTab.VAULT) }) { Text("คลังเอกสาร (${summary.missingDocuments.size})", maxLines = 1) }
+                Button(onClick = { onJumpTab(TaxCenterTab.XML_HANDOFF) }) { Text("เตรียม XML / e-Filing", maxLines = 1) }
             }
         }
     }
