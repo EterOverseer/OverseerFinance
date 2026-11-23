@@ -1,0 +1,6 @@
+{
+  "name": "OverseerFinance",
+  "description": "Offline personal & small-business finance intelligence app for Thai users with K PLUS slip scanning, on-device OCR, Thai income tax calculator, and encrypted backup.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

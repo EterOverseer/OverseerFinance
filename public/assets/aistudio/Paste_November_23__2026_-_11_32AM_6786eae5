@@ -1,0 +1,1220 @@
+# PROJECT: EterFinance
+## Personal Finance Intelligence — Native Android Application
+
+You are a Senior Android Architect, Kotlin Engineer, Database Engineer, Financial Software Developer, OCR Engineer, and Professional UI/UX Designer.
+
+Your task is to design and build a complete, production-quality native Android application named **EterFinance**.
+
+This is a real personal finance application, not a UI prototype, web application, or static demonstration.
+
+The application must prioritize data integrity, offline functionality, financial calculation accuracy, privacy, backup reliability, and maintainable architecture.
+
+---
+
+# 1. PROJECT IDENTITY
+
+Application Name: EterFinance
+
+Subtitle: Personal Finance Intelligence
+
+Platform: Native Android
+
+Language: Thai (Primary), English (Secondary where technically appropriate)
+
+Currency: Thai Baht (THB)
+
+Timezone: Asia/Bangkok
+
+Package Name: com.eteroverseer.eterfinance
+
+Target Users:
+- Personal finance users.
+- Freelancers.
+- Small online business owners.
+- People who want to track income and expenses.
+- Thai individual taxpayers.
+
+The application must work independently without requiring:
+- User registration.
+- Cloud accounts.
+- Online database services.
+- Firebase.
+- Gemini API.
+- External AI services.
+- Paid subscriptions.
+- Internet connectivity.
+
+**All application functionality must be available offline.**
+
+# 2. TECHNOLOGY STACK
+
+Build a genuine native Android application.
+
+Preferred technologies:
+
+- Kotlin.
+- Jetpack Compose.
+- Material 3.
+- MVVM Architecture.
+- Clean Architecture principles.
+- Repository Pattern.
+- Room Database backed by SQLite.
+- Kotlin Coroutines and Flow.
+- DataStore for application preferences.
+- WorkManager for background scanning.
+- Android Storage Access Framework (SAF).
+- Android Keystore only for device-specific secrets where appropriate.
+- On-device OCR.
+- Android native file management APIs.
+
+Use current stable dependency versions compatible with the generated Android project.
+
+Minimum Android SDK: API 26, subject to OCR runtime compatibility.
+
+Target SDK: Latest stable Android SDK available in the build environment.
+
+Use Gradle Kotlin DSL.
+
+Do not build this application as React, React Native, Flutter, a PWA, or a web application.
+
+Do not use mock databases for the actual application.
+
+Do not create decorative buttons without functional implementations.
+
+# 3. ABSOLUTE OFFLINE AND PRIVACY REQUIREMENTS
+
+This application is designed for local-only financial data management.
+
+Strict requirements:
+
+1. No runtime internet connection.
+2. No cloud synchronization.
+3. No remote AI processing.
+4. No analytics or tracking services.
+5. No advertising SDKs.
+6. No automatic uploading of financial information.
+7. No external API calls.
+8. No hidden transmission of images or transactions.
+
+Avoid declaring Android INTERNET permission in the final merged application manifest.
+
+All OCR models must be bundled with the application or otherwise provisioned locally before the application is considered complete.
+
+All financial processing must happen on the device.
+
+If an external dependency introduces network access, tracking, or unnecessary permissions, remove it or find a suitable offline alternative.
+
+# 4. APPLICATION UI/UX DESIGN
+
+Design a premium personal finance application.
+
+Visual Direction:
+
+- Premium Dark UI.
+- Deep Navy / Charcoal background.
+- Lime / Emerald Green accents.
+- Clean typography.
+- Modern financial dashboard.
+- Smooth transitions.
+- Subtle animations.
+- Professional charts.
+- Clear information hierarchy.
+- Excellent Thai font rendering.
+- Responsive layouts for different phone sizes.
+
+Avoid generic template designs.
+
+The interface should look like a mature commercial financial application.
+
+Suggested bottom navigation:
+
+1. Home
+2. Transactions
+3. Scan
+4. Tax
+5. More
+
+Build a consistent design system containing:
+- Typography scale.
+- Color tokens.
+- Spacing system.
+- Reusable cards.
+- Buttons.
+- Input fields.
+- Dialogs.
+- Bottom sheets.
+- Charts.
+- Empty states.
+- Loading states.
+- Error states.
+
+Support system dark mode and manual appearance preferences if practical.
+
+Thai must be the primary UI language.
+
+# 5. HOME DASHBOARD
+
+Create a comprehensive financial dashboard.
+
+Display:
+
+- Total available balance.
+- Total monthly income.
+- Total monthly expenses.
+- Net cash flow.
+- Monthly spending trend.
+- Income versus expense chart.
+- Top expense categories.
+- Recent transactions.
+- Pending OCR reviews.
+- Monthly budget progress.
+- Upcoming payment reminders.
+- Tax estimate for the current tax year.
+
+Allow users to switch between:
+- Today.
+- This week.
+- This month.
+- This year.
+- Custom date range.
+
+Include clear explanations for every financial total.
+
+Do not combine account transfers with genuine income or expenses.
+
+# 6. SMART INCOME & EXPENSE MANAGEMENT
+
+Implement a complete transaction management system.
+
+Transaction types:
+
+- Income.
+- Expense.
+- Internal Transfer.
+- Refund.
+- Loan Received.
+- Loan Repayment.
+- Debt Collection.
+- Other / Unclassified.
+
+Each transaction must support:
+
+- Unique ID.
+- Amount.
+- Currency.
+- Date.
+- Time.
+- Description.
+- Category.
+- Account.
+- Sender.
+- Recipient.
+- Payment reference.
+- Notes.
+- Attachment.
+- Transaction source.
+- Tax classification.
+- Review status.
+
+Store monetary amounts using integer satang or another precision-safe decimal representation.
+
+Never use floating-point arithmetic for financial calculations.
+
+Allow users to:
+
+- Add transactions manually.
+- Edit transactions.
+- Delete transactions with confirmation.
+- Search transactions.
+- Filter by category.
+- Filter by date.
+- Filter by account.
+- Filter by amount.
+- Attach images.
+- View transaction details.
+- Export reports.
+
+Provide transaction history and reliable sorting.
+
+## Internal Transfer Detection
+
+A transfer between two accounts owned by the same person must not be counted as income or expense.
+
+Allow users to identify and manage their own accounts.
+
+Provide configurable transfer detection rules.
+
+Never automatically assume that every incoming payment is taxable income.
+
+# 7. K PLUS FOLDER AUTO SCANNER
+
+This is one of the most important application features.
+
+The application must be able to scan images saved by K PLUS.
+
+Typical source folder:
+
+Pictures/K Plus
+
+However, do not hardcode the physical path.
+
+Use Android Storage Access Framework.
+
+Implement:
+
+1. ACTION_OPEN_DOCUMENT_TREE.
+2. User selects the K Plus folder.
+3. Persist the granted URI permissions.
+4. Remember the selected folder.
+5. Scan image files.
+6. Detect newly added images.
+7. Avoid processing previously imported images unnecessarily.
+
+Support common image formats:
+
+- JPG.
+- JPEG.
+- PNG.
+- WEBP.
+- HEIC where supported by Android decoding.
+
+## Automatic Scanning
+
+Use WorkManager for periodic background scanning.
+
+Implement:
+- Scan when the application starts.
+- Scan when the application returns to the foreground.
+- Manual Scan Now button.
+- Periodic background scan, using the minimum supported periodic interval where appropriate.
+- Background processing with progress indication.
+- Retry after recoverable errors.
+- Duplicate prevention.
+
+IMPORTANT:
+
+Android background scheduling is not guaranteed to run at an exact time.
+
+Do not claim real-time folder monitoring.
+
+Provide clear scan status and last successful scan time.
+
+If folder permission is revoked, show a notification inside the application and request folder selection again.
+
+# 8. SAFE IMAGE IMPORT PIPELINE
+
+Never use the original K PLUS folder as the application's permanent image storage.
+
+The application must create its own private image storage.
+
+Required import workflow:
+
+STEP 1:
+Detect an image in the selected K PLUS folder.
+
+STEP 2:
+Calculate SHA-256 of the source image.
+
+STEP 3:
+Check whether the exact image has already been imported.
+
+STEP 4:
+Calculate perceptual hash (pHash) for similarity detection.
+
+STEP 5:
+Copy the original image into EterFinance private storage.
+
+STEP 6:
+Verify the copied file.
+
+Requirements:
+- Compare source and destination SHA-256.
+- Verify file readability.
+- Verify file size.
+- Confirm that the copy completed successfully.
+- Use temporary files and atomic renaming where practical.
+
+STEP 7:
+Save image metadata in SQLite.
+
+STEP 8:
+Perform local OCR.
+
+STEP 9:
+Create or update the associated transaction draft.
+
+Only after successful copying and verification may the image be marked as IMPORTED.
+
+## Image Import States
+
+Implement these states:
+
+PENDING:
+Image has not been imported successfully.
+
+IMPORTED_VERIFIED:
+Original image has been copied and verified.
+
+FAILED:
+Import failed. Retry is required.
+
+DUPLICATE:
+Exact image already exists.
+
+SIMILAR_IMAGE:
+Possible duplicate based on perceptual similarity. Requires review.
+
+Never automatically delete an image based only on pHash similarity.
+
+## SHA-256 and pHash
+
+Implement both algorithms.
+
+SHA-256:
+- Exact duplicate detection.
+- File integrity verification.
+- Backup integrity checking.
+
+pHash:
+- Detect visually similar images.
+- Help identify resized, recompressed, or modified copies.
+- Store the perceptual hash in the database.
+
+Use a deterministic image normalization procedure before calculating pHash.
+
+Use Hamming distance for similarity comparison.
+
+Make the similarity threshold configurable or carefully selected through testing.
+
+pHash must never be treated as proof that two transactions are identical.
+
+# 9. THAI OCR ENGINE
+
+Implement fully offline OCR.
+
+Preferred OCR:
+
+PaddleOCR PP-OCRv5 Mobile with Thai recognition model:
+
+th_PP-OCRv5_mobile_rec
+
+Use a compatible document/text detection model.
+
+Prefer an Android-compatible ONNX Runtime implementation based on the official PaddleOCR Android deployment project.
+
+Reference:
+https://github.com/PaddlePaddle/PaddleOCR
+
+The application must include the required model assets locally.
+
+Do not download OCR models at runtime.
+
+The OCR engine should recognize:
+
+- Thai text.
+- English text.
+- Arabic numerals.
+- Monetary amounts.
+- Dates.
+- Times.
+- Bank transaction identifiers.
+- Sender names.
+- Recipient names.
+- Account details where available.
+
+Implement a flexible parsing layer for Thai bank slips.
+
+Extract:
+
+- Transaction date.
+- Transaction time.
+- Transfer amount.
+- Sender.
+- Recipient.
+- Bank information.
+- Transaction reference.
+- Available account identifiers.
+
+Support both Buddhist Era (BE) and Gregorian Era (CE) date parsing.
+
+Store canonical date values internally and display Thai dates in the user interface.
+
+## OCR Accuracy and Review
+
+Every extracted field should have a confidence value where supported by the OCR engine.
+
+Never invent missing information.
+
+If OCR cannot determine a value:
+- Keep it empty.
+- Mark it as requiring review.
+- Allow manual correction.
+
+Provide a transaction review screen where the user can compare the original slip with extracted information.
+
+Never treat OCR text as proof that a transfer actually occurred.
+
+If OCR implementation cannot be fully integrated, clearly report the technical limitation. Do not replace it with fake OCR or hardcoded sample results.
+
+# 10. K PLUS STORAGE CLEANER
+
+Create a dedicated screen named:
+
+K Plus Storage Cleaner
+
+Purpose:
+
+Allow users to remove original images from the K PLUS folder after they have been safely imported into EterFinance.
+
+Display:
+
+- Original filename.
+- Original file size.
+- Import date.
+- Transaction date.
+- Transaction amount.
+- Import verification status.
+
+Allow users to select multiple images.
+
+Provide:
+
+- Delete selected original images.
+- Delete all verified imported originals.
+- Keep original images.
+- View original image.
+- View EterFinance stored copy.
+
+STRICT SAFETY RULES:
+
+1. Never display deletion options for PENDING images.
+2. Never display deletion options for FAILED images.
+3. Never delete original images before copy verification.
+4. Never delete EterFinance private copies through this feature.
+5. Never delete images automatically without explicit user approval.
+6. Check whether the selected document provider supports deletion.
+7. Handle permission and deletion failures gracefully.
+
+If Android or the selected document provider does not permit deleting a source image, explain that the user must delete it manually.
+
+Deleting an original K PLUS image must never delete its corresponding EterFinance copy.
+
+# 11. ACCOUNTS AND FINANCIAL CATEGORIES
+
+Implement account management.
+
+Examples:
+- KBank.
+- Cash.
+- Other bank accounts.
+- Savings account.
+- Business account.
+
+Users may create unlimited accounts.
+
+Each account should support:
+- Name.
+- Account type.
+- Opening balance.
+- Current calculated balance.
+- Notes.
+- Active/inactive status.
+
+Create customizable categories.
+
+Income examples:
+- Salary.
+- Online Sales.
+- Freelance.
+- Business Income.
+- Other Income.
+
+Expense examples:
+- Food.
+- Transportation.
+- Shopping.
+- Utilities.
+- Rent.
+- Entertainment.
+- Business Expenses.
+- Other Expenses.
+
+Allow custom categories and icons.
+
+Implement configurable automatic categorization rules.
+
+Example:
+A particular recipient can be assigned to a particular category automatically.
+
+Rules must be editable and removable.
+
+# 12. DEBT AND PAYMENT MANAGER
+
+Build a debt management module.
+
+Features:
+
+- Money lent to others.
+- Money borrowed.
+- Repayment tracking.
+- Installment schedules.
+- Due dates.
+- Outstanding balances.
+- Payment history.
+- Associated slip attachments.
+
+Allow the user to configure reminders.
+
+A repayment must be linked to its original debt record.
+
+Do not count internal debt repayments as ordinary income without proper classification.
+
+# 13. BUDGET AND RECURRING EXPENSES
+
+Implement:
+
+- Monthly budgets.
+- Category budgets.
+- Spending limits.
+- Recurring payments.
+- Subscription tracking.
+- Payment reminders.
+- Upcoming bills.
+- Budget progress.
+
+Use local notification scheduling.
+
+All reminders must work without an internet connection.
+
+# 14. THAI PERSONAL INCOME TAX CALCULATOR
+
+Build a dedicated Thai Personal Income Tax module.
+
+Support Thai individual income tax calculations.
+
+Recognize income classifications:
+
+- Section 40(1)
+- Section 40(2)
+- Section 40(3)
+- Section 40(4)
+- Section 40(5)
+- Section 40(6)
+- Section 40(7)
+- Section 40(8)
+
+Allow users to assign tax classifications to income transactions manually.
+
+Do not assume that all incoming bank transfers are taxable income.
+
+Examples requiring separate classification:
+- Transfers between personal accounts.
+- Loans.
+- Refunds.
+- Reimbursements.
+- Gifts.
+- Business revenue.
+- Salary.
+- Freelance income.
+
+## Tax Calculation Engine
+
+Implement a year-based and configurable tax rules engine.
+
+Use progressive marginal tax calculations.
+
+Initial progressive tax brackets to encode as the verified Revenue Department reference schedule:
+
+| Net Taxable Income | Tax Rate |
+|---|---:|
+| 0–150,000 THB | 0% |
+| 150,001–300,000 THB | 5% |
+| 300,001–500,000 THB | 10% |
+| 500,001–750,000 THB | 15% |
+| 750,001–1,000,000 THB | 20% |
+| 1,000,001–2,000,000 THB | 25% |
+| 2,000,001–5,000,000 THB | 30% |
+| Above 5,000,000 THB | 35% |
+
+Official reference:
+https://www.rd.go.th/26218.html
+
+The above is a progressive marginal rate schedule, not a flat rate applied to the entire income amount.
+
+## Additional Tax Features
+
+- Annual income summary.
+- Income by Section 40 classification.
+- Eligible expense calculations.
+- Personal allowances.
+- Dependent allowances.
+- Insurance deductions.
+- Retirement and investment deductions where legally applicable.
+- Donation deductions.
+- Withholding tax.
+- Annual tax estimate.
+- Estimated tax payable.
+- Estimated tax refund.
+
+IMPORTANT TAX ACCURACY REQUIREMENTS:
+
+1. Every tax year must have its own rule set.
+2. Keep the tax rules separate from application code.
+3. Store source URL and applicable tax year with every ruleset.
+4. Do not invent deduction limits.
+5. Do not automatically apply deduction benefits without user confirmation.
+6. Implement applicable alternative tax calculation methods only after verifying their current official requirements.
+7. Include unit tests for tax calculations.
+8. Display a detailed breakdown so users can understand how the result was calculated.
+9. Historical calculations must remain reproducible using their original ruleset.
+
+Provide an informational disclaimer explaining that estimates are not a substitute for official tax filing or professional tax advice.
+
+# 15. BUSINESS MINI ACCOUNTING
+
+Provide a lightweight small-business accounting module.
+
+Features:
+
+- Sales income.
+- Business expenses.
+- Cost tracking.
+- Shipping expenses.
+- Advertising expenses.
+- Gross income.
+- Net profit.
+- Outstanding customer payments.
+- Business transaction history.
+
+Allow personal and business transactions to be separated.
+
+Users must be able to filter reports by account and business profile.
+
+# 16. FINANCIAL INTELLIGENCE
+
+Build an offline financial analysis engine.
+
+This must be a local rule-based analytics engine, not a cloud AI service.
+
+Analyze:
+
+- Monthly spending trends.
+- Income trends.
+- Category distribution.
+- Frequent recipients.
+- Unusual spending.
+- Cash flow.
+- Budget deviations.
+- Monthly savings.
+- Future recurring expenses.
+- Estimated remaining monthly balance.
+
+Example insights:
+
+"Your food spending increased by 18% compared with last month."
+
+"Your transportation expenses are your largest spending category."
+
+"Your recurring payments total 2,400 THB this month."
+
+Avoid generating insights from insufficient data.
+
+Every generated insight must be explainable from actual stored transactions.
+
+# 17. REPORTS AND EXPORTS
+
+Provide reporting capabilities.
+
+- Daily report.
+- Weekly report.
+- Monthly report.
+- Annual report.
+- Income report.
+- Expense report.
+- Tax report.
+- Business report.
+- Debt report.
+
+Provide CSV export and PDF report generation where appropriate.
+
+Allow custom date ranges.
+
+# 18. DATABASE ARCHITECTURE
+
+Use Room backed by SQLite.
+
+Create normalized, relational tables.
+
+Suggested tables:
+
+- transactions
+- accounts
+- categories
+- contacts
+- attachments
+- imported_images
+- scan_sources
+- ocr_results
+- categorization_rules
+- budgets
+- recurring_transactions
+- debts
+- debt_repayments
+- tax_profiles
+- tax_years
+- tax_rules
+- tax_deductions
+- withholding_records
+- app_settings
+- backup_history
+
+Use appropriate:
+- Primary keys.
+- Foreign keys.
+- Unique constraints.
+- Indexes.
+- Transactions.
+- Database migrations.
+
+Do not store image binaries directly in ordinary transaction rows.
+
+Store imported images in application-private storage and maintain reliable references in SQLite.
+
+The application must remain usable with thousands of transactions and images.
+
+Use safe database transaction handling.
+
+# 19. BACKUP AND RECOVERY SYSTEM
+
+THIS IS A CRITICAL CORE FEATURE.
+
+Implement a complete backup and restore system named:
+
+EterFinance Backup Center
+
+Provide two backup formats.
+
+## A. FULL SQLITE EXPORT
+
+File extension:
+
+.sqlite
+
+This must be a portable, self-contained SQLite backup.
+
+It must include:
+- All database tables.
+- Financial transactions.
+- Accounts.
+- Categories.
+- Tax records.
+- Settings.
+- OCR metadata.
+- Attachment metadata.
+- Original imported images stored as BLOBs in a dedicated portable attachment table.
+- Backup manifest and version information.
+
+This allows the SQLite export to be moved to a computer and inspected using SQLite-compatible tools.
+
+Do not export only the live database if this would omit imported images.
+
+SQLite exports contain sensitive financial data. Clearly warn the user that this format is not encrypted by default.
+
+## B. FULL RECOVERY BACKUP
+
+File extension:
+
+.efbackup
+
+This is the recommended backup format.
+
+Create ONE portable file containing:
+
+1. Complete SQLite database.
+2. All imported original images.
+3. All attachments.
+4. OCR metadata.
+5. Accounts.
+6. Categories.
+7. Transactions.
+8. Tax records.
+9. Tax year configurations.
+10. Budgets.
+11. Debt records.
+12. Recurring payment rules.
+13. Custom categorization rules.
+14. Application preferences.
+15. Backup manifest.
+16. Database schema version.
+17. Application version.
+18. Integrity metadata.
+
+No external folders should be required to complete restoration.
+
+The file must be portable to another Android device.
+
+Do not rely on file paths from the original phone.
+
+## BACKUP ENCRYPTION
+
+Encrypt .efbackup by default.
+
+Security requirements:
+
+- AES-256-GCM authenticated encryption.
+- Secure random salt.
+- Unique nonce for every backup.
+- Use a password-based key derivation function such as Argon2id, or a securely configured PBKDF2-HMAC-SHA256 fallback if the preferred implementation is unavailable.
+- Store the KDF parameters in the backup header.
+- Authenticate backup metadata.
+- Use established cryptographic libraries.
+- Never implement custom encryption primitives.
+
+The user must enter a backup password when creating and restoring encrypted backups.
+
+Do not store the backup password in plain text.
+
+Explain that a forgotten backup password cannot be recovered by the application.
+
+## BACKUP WORKFLOW
+
+1. Check database consistency.
+2. Create a consistent database snapshot.
+3. Collect all required images and attachments.
+4. Generate a manifest.
+5. Calculate SHA-256 for individual payload files.
+6. Package all data.
+7. Compress where appropriate.
+8. Encrypt the package.
+9. Save through Android's document picker.
+10. Verify the completed backup.
+
+Use a temporary output file and finalize it only after successful completion.
+
+Show progress and failure details.
+
+## FULL RESTORE — DEFAULT OPTION A
+
+The default restore behavior MUST be:
+
+FULL RESTORE / REPLACE CURRENT DATA.
+
+When importing a valid .efbackup or a valid self-contained EterFinance .sqlite backup:
+
+- Replace all current application database records.
+- Replace current attachment data.
+- Restore original images.
+- Restore settings and configurations.
+- Restore categories and rules.
+- Restore historical financial information.
+
+Do not merge old and new records.
+
+Do not duplicate transactions.
+
+Do not combine two backups automatically.
+
+The imported backup becomes the authoritative application state.
+
+Before restoring:
+- Show a clear destructive-action warning.
+- Request explicit confirmation.
+- Verify file format.
+- Verify password.
+- Verify manifest.
+- Verify hashes.
+- Verify database integrity.
+- Check available storage.
+
+Perform restore in a temporary staging area.
+
+Keep the existing installation untouched until the staged restore passes every validation.
+
+If restoration fails, roll back safely and preserve the existing application data.
+
+Never leave a partially restored database.
+
+After successful restore, reopen the application using the restored data.
+
+## DEVICE-SPECIFIC PERMISSIONS
+
+Do not assume that the old device's K PLUS folder permissions will work on a new phone.
+
+Do not treat SAF URI permissions as portable data.
+
+After Full Restore:
+- Restore all financial records and stored images.
+- Inform the user that the K PLUS source folder may need to be selected again.
+- Provide a Reconnect K PLUS Folder action.
+
+The restored app must still work fully without reconnecting K PLUS.
+
+# 20. BACKUP CENTER UI
+
+Provide a dedicated Backup Center screen.
+
+Sections:
+
+Export:
+- Export Full Recovery (.efbackup).
+- Export SQLite (.sqlite).
+
+Import:
+- Import .efbackup.
+- Import EterFinance .sqlite.
+
+Backup History:
+- Previous backup date.
+- File name.
+- File size.
+- Backup format.
+- Backup status.
+
+Verification:
+- Verify backup file.
+- Check file integrity.
+- Check manifest.
+- Validate SQLite database.
+- Validate attachment checksums.
+
+Restore:
+- Preview backup contents.
+- Show transaction count.
+- Show image count.
+- Show estimated storage requirement.
+- Show backup version.
+- Display the Full Restore warning.
+- Confirm restore.
+
+All buttons must work.
+
+# 21. DATA PROTECTION AND SAFETY
+
+Implement robust error handling.
+
+Protect against:
+
+- Interrupted image imports.
+- Interrupted backups.
+- Corrupt images.
+- Duplicate files.
+- Database corruption.
+- Failed migrations.
+- Insufficient storage.
+- Incorrect passwords.
+- Corrupt backup packages.
+- Missing attachment files.
+- Revoked folder permissions.
+- Failed document deletion.
+- OCR failures.
+
+Never silently discard user data.
+
+Never silently replace a database.
+
+Never silently delete source images.
+
+Use clear error messages in Thai.
+
+Provide an internal diagnostic screen that does not transmit any information externally.
+
+# 22. SETTINGS
+
+Provide:
+
+- Language preference.
+- Theme preference.
+- Currency display.
+- Date format.
+- Tax year selection.
+- K PLUS folder configuration.
+- Background scan configuration.
+- OCR configuration.
+- Storage usage.
+- Database information.
+- Backup Center.
+- Notification settings.
+- Data management.
+- Application information.
+
+Display:
+- Application version.
+- Database schema version.
+- Total transaction count.
+- Total stored images.
+- Storage consumed by images.
+- Last successful scan.
+- Last successful backup.
+
+# 23. QUALITY ASSURANCE AND TESTING
+
+Do not consider the application complete merely because the interface looks correct.
+
+Implement unit tests and integration tests.
+
+Required tests:
+
+## Transaction Tests
+- Income calculation.
+- Expense calculation.
+- Internal transfer handling.
+- Refund handling.
+- Balance calculations.
+- Amount precision.
+
+## Image Pipeline Tests
+- Exact SHA-256 duplicate detection.
+- pHash similarity detection.
+- Successful copy verification.
+- Interrupted copy.
+- Corrupted source image.
+- Duplicate import prevention.
+
+## OCR Tests
+- Thai text.
+- Transaction amount extraction.
+- Date extraction.
+- Time extraction.
+- Missing fields.
+- Low confidence.
+- Manual correction workflow.
+
+## Backup Tests
+- Successful backup.
+- Successful restore.
+- Wrong password.
+- Corrupted backup.
+- Tampered encrypted backup.
+- Missing attachment.
+- Database integrity failure.
+- Insufficient storage.
+- Interrupted restore.
+- Restore rollback.
+- Schema migration.
+- Full Restore replacing existing data.
+- Verify that no old records remain after a successful full replacement.
+
+## Storage Cleaner Tests
+- Cannot delete PENDING image.
+- Cannot delete FAILED image.
+- Can delete a verified original when provider permissions allow.
+- Cannot delete the EterFinance private copy.
+- Graceful handling of deletion permission failures.
+
+## Tax Tests
+- Progressive tax brackets.
+- Boundary values.
+- Expenses.
+- Allowances.
+- Withholding tax.
+- Historical tax year calculations.
+- Alternative methods where officially applicable.
+
+# 24. IMPLEMENTATION PRIORITIES
+
+Build the application in this priority order:
+
+PHASE 1 — FOUNDATION
+- Native Android project.
+- Design system.
+- Room database.
+- Core transaction engine.
+- Account and category management.
+- Dashboard.
+
+PHASE 2 — K PLUS IMPORT
+- Storage Access Framework.
+- Folder permissions.
+- Folder scanner.
+- WorkManager.
+- Image private storage.
+- SHA-256.
+- pHash.
+- OCR integration.
+- Review workflow.
+- Storage Cleaner.
+
+PHASE 3 — FINANCIAL MODULES
+- Income and expenses.
+- Budgets.
+- Debt management.
+- Recurring payments.
+- Business accounting.
+- Tax calculation.
+- Financial reports.
+- Offline analytics.
+
+PHASE 4 — BACKUP AND RECOVERY
+- SQLite portable export/import.
+- Encrypted .efbackup.
+- Integrity verification.
+- Full Restore.
+- Restore rollback.
+- Backup History.
+
+PHASE 5 — FINAL VALIDATION
+- Run all tests.
+- Fix build failures.
+- Fix lint issues.
+- Check data integrity.
+- Check offline behavior.
+- Check APK installation.
+- Check large backup handling.
+
+The Backup and Recovery Engine is a mandatory core feature, not a future optional feature.
+
+# 25. FINAL DELIVERABLES
+
+Deliver:
+
+1. Complete native Android source code.
+2. Fully functional Jetpack Compose UI.
+3. Room / SQLite database implementation.
+4. Working K PLUS folder scanner.
+5. On-device Thai OCR implementation.
+6. SHA-256 and pHash implementation.
+7. Working transaction management.
+8. Functional Thai tax calculation engine.
+9. Working Backup Center.
+10. Working Full Restore.
+11. Database migrations.
+12. Unit tests.
+13. Integration tests.
+14. Build configuration.
+15. README with architecture and build instructions.
+16. Debug APK for testing.
+17. Release-ready build configuration.
+
+Do not report features as completed unless they are actually implemented and verified.
+
+Do not replace difficult functionality with static UI or sample data.
+
+If a component cannot be implemented because a dependency, runtime, model file, or platform capability is unavailable, clearly identify the blocker and the exact files or steps required to finish it.
+
+Do not silently substitute a cloud service or an online API.
+
+Prioritize correctness and data safety over superficial feature completeness.
+
+---
+
+# FINAL PRODUCT GOAL
+
+EterFinance must become a fully offline Android Personal Finance System.
+
+The user should be able to:
+
+1. Select the K PLUS folder.
+2. Let EterFinance scan new transaction images automatically.
+3. Preserve original images inside EterFinance.
+4. Read Thai bank slips locally.
+5. Organize income and expenses.
+6. Calculate estimated Thai personal income tax.
+7. Manage personal and business finances.
+8. Analyze financial behavior.
+9. Delete original K PLUS images safely after verified import.
+10. Export the entire application data into one encrypted .efbackup file.
+11. Restore everything on another Android device using Full Restore.
+
+**One application. One local database. Complete financial history. One-file full recovery. Zero cloud dependency.**
+
+Build this as a real application, not a demonstration.
